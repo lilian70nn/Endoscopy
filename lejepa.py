@@ -13,7 +13,7 @@ def function(args):
 
 
 
-def train_lejepa(model, dataloader, config=None):
+def train_lejepa(model, dataloader):
     # 1. Prepare LeJEPA-specific components
     # 2. Train according to the original LeJEPA method
     # 3. Save checkpoint

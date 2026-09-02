@@ -13,7 +13,7 @@ import lightning.pytorch as pl
 
 
 
-# Default DINOv1 settings: based on the Meta repo you provided
+# Default DINOv1 settings: based on the Meta repo provided
 
 DINO_DEFAULTS = {
     "epochs": 100,

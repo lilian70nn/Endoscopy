@@ -1,14 +1,31 @@
-from .utils import initialize_siglip2, initialize_dataloader
+from .utils import initialize_siglip2, initialize_dataloader, load_trained_model
 from .dino import train_dino
 from .lejepa import train_lejepa
 
+
 models_to_evaluate = [
-    initialize_siglip2(initialization="siglip2"),
-    initialize_siglip2(initialization="imagenet"),
-    train_dino(initialize_siglip2(initialization="siglip2"), initialize_dataloader(batch_size=64)),
-    train_dino(initialize_siglip2(initialization="imagenet"), initialize_dataloader(batch_size=64)),
-    train_lejepa(initialize_siglip2(initialization="siglip2"), initialize_dataloader(batch_size=64)),
-    train_lejepa(initialize_siglip2(initialization="imagenet"), initialize_dataloader(batch_size=64))
+    initialize_siglip2("siglip2"),
+    initialize_siglip2("imagenet"),
+
+    load_trained_model(
+        "siglip2",
+        "checkpoints/dino_siglip2.pth"
+    ),
+
+    load_trained_model(
+        "imagenet",
+        "checkpoints/dino_imagenet.pth"
+    ),
+
+    load_trained_model(
+        "siglip2",
+        "checkpoints/lejepa_siglip2.pth"
+    ),
+
+    load_trained_model(
+        "imagenet",
+        "checkpoints/lejepa_imagenet.pth"
+    ),
 ]
 
 def model_evaluation(model, dataloader):

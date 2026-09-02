@@ -1,3 +1,4 @@
+import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 
@@ -33,3 +34,11 @@ def initialize_dataloader(batch_size=64):
     )
 
     return dataloader
+
+def load_trained_model(initialization, checkpoint_path):
+    model = initialize_siglip2(initialization=initialization)
+
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint["model"])
+
+    return model
