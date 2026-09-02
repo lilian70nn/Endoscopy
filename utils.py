@@ -1,3 +1,11 @@
+"""
+Shared utilities for:
+    - SigLIP2 model initialization
+    - Dataset and DataLoader initialization
+    - Checkpoint loading
+"""
+
+
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader

@@ -1,3 +1,15 @@
+"""
+Evaluation of initialized and SSL-pretrained models.
+
+Models are initialized first and pretrained weights are loaded
+from the corresponding checkpoints.
+
+Evaluation includes:
+    - k-NN
+    - Linear probing
+"""
+
+
 from .utils import initialize_siglip2, initialize_dataloader, load_trained_model
 from .dino import train_dino
 from .lejepa import train_lejepa

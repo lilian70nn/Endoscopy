@@ -1,3 +1,18 @@
+"""
+DINOv1 self-supervised pre-training.
+
+Input:
+    - Initialized vision model
+    - Training DataLoader
+
+Output:
+    - Trained model
+
+The training checkpoint is saved for later loading and evaluation.
+"""
+
+
+
 import copy
 import math
 import random

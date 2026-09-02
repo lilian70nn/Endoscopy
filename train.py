@@ -1,3 +1,12 @@
+"""
+Entry point for SSL pre-training experiments.
+
+Runs DINOv1 and LeJEPA with:
+    - SigLIP2 initialization
+    - ImageNet initialization
+"""
+
+
 from utils import initialize_siglip2, initialize_dataloader
 from dino import train_dino
 from lejepa import train_lejepa
