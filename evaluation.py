@@ -5,8 +5,7 @@ Models are initialized first and pretrained weights are loaded
 from the corresponding checkpoints.
 
 Evaluation includes:
-    - k-NN
-    - Linear probing
+    to be defined...
 """
 
 
@@ -42,10 +41,7 @@ models_to_evaluate = [
 
 def model_evaluation(model, dataloader):
     # 1. Get representations from the model
-    # 2. Evaluate representations, e.g.:
-    #    - k-NN
-    #    - Linear probing
-    #    - Other evaluation methods
+    # 2. Evaluate representations
     # 3. Return evaluation results
     ...
 
