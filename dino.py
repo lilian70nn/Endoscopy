@@ -143,8 +143,8 @@ def extract_features(output):
 
 
 def run_backbone(backbone, images):
-    try: output = backbone(pixel_values=images)
-    except (TypeError, ValueError): output = backbone(images)
+    try: output = backbone(pixel_values=images, interpolate_pos_encoding=True)
+    except TypeError: output = backbone(images)
     return extract_features(output)
 
 
@@ -350,5 +350,5 @@ def train_dino(model, dataloader, config=None):
     del probe_model
 
     module = DINOTrainer(model, feature_dim, len(dataloader), cfg)
-    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="auto", devices="auto", precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, log_every_n_steps=10)
+    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="auto", devices=1, precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, log_every_n_steps=10)
     trainer.fit(module, train_dataloaders=dataloader)
