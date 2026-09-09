@@ -289,7 +289,8 @@ class DINOTrainer(pl.LightningModule):
             m = float(self.momentum_schedule[step])
             for student_param, teacher_param in zip(self.student.parameters(), self.teacher.parameters()):
                 teacher_param.data.mul_(m).add_(student_param.detach().data, alpha=1.0 - m)
-        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        batch_size = len(batch)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
         self.log("lr", float(self.lr_schedule[step]), prog_bar=False)
         self.log("teacher_momentum", float(self.momentum_schedule[step]), prog_bar=False)
         return loss
