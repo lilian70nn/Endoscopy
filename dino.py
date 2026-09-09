@@ -5,15 +5,14 @@ Input:
     - Initialized vision model
     - Training DataLoader
 
-Output:
-    - Trained model
-
-The training checkpoint is saved for later loading and evaluation.
+The teacher encoder checkpoint is saved after each epoch
+for later downstream evaluation.
 """
 
 
 
 import copy
+import csv
 import math
 import random
 from pathlib import Path
@@ -296,21 +295,38 @@ class DINOTrainer(pl.LightningModule):
         return loss
 
     def on_train_epoch_end(self):
-        if self.global_rank != 0: return
-        Path(self.cfg["output_dir"]).mkdir(parents=True, exist_ok=True)
+        if self.global_rank != 0:
+            return
+
+        output_dir = Path(self.cfg["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        epoch = self.current_epoch + 1
+
+        # Save teacher vision encoder checkpoint
         torch.save({
-            "epoch": self.current_epoch + 1,
-            "student": self.student.state_dict(),
-            "teacher": self.teacher.state_dict(),
-            "student_backbone": self.student.backbone.state_dict(),
-            "teacher_backbone": self.teacher.backbone.state_dict(),
-            "dino_loss": self.dino_loss.state_dict(),
-            "config": self.cfg
-        }, Path(self.cfg["output_dir"]) / "checkpoint.pth")
+            "epoch": epoch,
+            "model": self.teacher.backbone.state_dict()
+        }, output_dir / f"checkpoint_epoch_{epoch}.pth")
+
+        # Save training metrics
+        train_loss = self.trainer.callback_metrics.get("train_loss_epoch")
+        log_file = output_dir / "training_log.csv"
+        write_header = not log_file.exists()
+
+        with log_file.open("a", newline="") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow(["epoch", "train_loss", "lr", "teacher_momentum"])
+            writer.writerow([
+                epoch,
+                float(train_loss.detach().cpu()) if train_loss is not None else "",
+                float(self.lr_schedule[min(epoch * self.steps_per_epoch - 1, len(self.lr_schedule) - 1)]),
+                float(self.momentum_schedule[min(epoch * self.steps_per_epoch - 1, len(self.momentum_schedule) - 1)])
+            ])
 
 
 
-# Public function: model + dataloader -> trained encoder
+# Public function: DINO pre-training
 
 def train_dino(model, dataloader, config=None):
     cfg = DINO_DEFAULTS.copy()
@@ -327,15 +343,12 @@ def train_dino(model, dataloader, config=None):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     probe_model = copy.deepcopy(model).to(device).eval()
-    with torch.no_grad(): feature_dim = run_backbone(probe_model, sample_tensor.to(device)).shape[-1]
+
+    with torch.no_grad():
+        feature_dim = run_backbone(probe_model, sample_tensor.to(device)).shape[-1]
+
     del probe_model
 
     module = DINOTrainer(model, feature_dim, len(dataloader), cfg)
     trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="auto", devices="auto", precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, log_every_n_steps=10)
     trainer.fit(module, train_dataloaders=dataloader)
-
-    trained_encoder = copy.deepcopy(module.teacher.backbone).cpu().eval()
-    Path(cfg["output_dir"]).mkdir(parents=True, exist_ok=True)
-    torch.save(trained_encoder.state_dict(), Path(cfg["output_dir"]) / "trained_teacher_encoder.pth")
-    torch.save(module.student.backbone.state_dict(), Path(cfg["output_dir"]) / "trained_student_encoder.pth")
-    return trained_encoder

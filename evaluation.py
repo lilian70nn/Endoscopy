@@ -28,15 +28,15 @@ models_to_evaluate = [
         "checkpoints/dino_imagenet.pth"
     ),
 
-    load_trained_model(
-        "siglip2",
-        "checkpoints/lejepa_siglip2.pth"
-    ),
+    # load_trained_model(
+    #     "siglip2",
+    #     "checkpoints/lejepa_siglip2.pth"
+    # ),
 
-    load_trained_model(
-        "imagenet",
-        "checkpoints/lejepa_imagenet.pth"
-    ),
+    # load_trained_model(
+    #     "imagenet",
+    #     "checkpoints/lejepa_imagenet.pth"
+    # ),
 ]
 
 def model_evaluation(model, dataloader):

@@ -13,26 +13,25 @@ from lejepa import train_lejepa
 
 
 def main():
-
     dataloader = initialize_dataloader(batch_size=64)
 
     experiments = [
         ("dino", "siglip2"),
         ("dino", "imagenet"),
-        ("lejepa", "siglip2"),
-        ("lejepa", "imagenet"),
+        # ("lejepa", "siglip2"),
+        # ("lejepa", "imagenet"),
     ]
 
     for ssl_method, initialization in experiments:
-
         model = initialize_siglip2(initialization=initialization)
 
         if ssl_method == "dino":
-            trained_model = train_dino(model, dataloader)
-
+            train_dino(model.vision_model, dataloader, config={"output_dir": f"./checkpoints/dino_{initialization}"})
         elif ssl_method == "lejepa":
-            trained_model = train_lejepa(model, dataloader)
+            train_lejepa(model.vision_model, dataloader, config={"output_dir": f"./checkpoints/lejepa_{initialization}"})
 
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
