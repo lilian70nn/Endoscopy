@@ -9,7 +9,7 @@ Runs DINOv1 and LeJEPA with:
 
 from utils import initialize_siglip2, initialize_dataloader
 from dino import train_dino
-from lejepa import train_lejepa
+#from lejepa import train_lejepa
 
 
 def main():
