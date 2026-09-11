@@ -1,6 +1,6 @@
 import os, io, math, random, zipfile, subprocess, requests
 from pathlib import Path
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 from PIL import Image
 from torch.utils.data import IterableDataset, DataLoader
 
