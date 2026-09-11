@@ -1,6 +1,6 @@
 import os, io, math, random, zipfile, subprocess, requests
 from pathlib import Path
-from tqdm.auto import tqdm
+from tqdm.notebook import tqdm
 from PIL import Image
 from torch.utils.data import IterableDataset, DataLoader
 
@@ -109,6 +109,9 @@ class GastroNetCortexDataset(IterableDataset):
         self.shuffle_images = shuffle_images
         self.seed = seed
 
+        self.shard_bar = None
+        self.image_bar = None
+
     def download_shard(self, cortex, info):
         path = self.cache_dir / info["file_name"]
         expected_size = int(info["size"])
@@ -148,13 +151,15 @@ class GastroNetCortexDataset(IterableDataset):
         if self.shuffle_shards:
             rng.shuffle(shards)
 
-        shard_bar = tqdm(
-            total=len(shards),
-            desc="Shards",
-            position=1,
-            leave=False,
-            dynamic_ncols=True
-        )
+        if self.shard_bar is None:
+            self.shard_bar = tqdm(
+                total=len(shards),
+                desc="Shards",
+                leave=True
+            )
+        else:
+            self.shard_bar.reset(total=len(shards))
+            self.shard_bar.set_description("Shards")
 
         for info in shards:
             path = self.download_shard(cortex, info)
@@ -170,24 +175,24 @@ class GastroNetCortexDataset(IterableDataset):
                     if self.shuffle_images:
                         rng.shuffle(names)
 
-                    image_bar = tqdm(
-                        total=len(names),
-                        desc=info["file_name"],
-                        position=2,
-                        leave=False,
-                        dynamic_ncols=True
-                    )
+                    if self.image_bar is None:
+                        self.image_bar = tqdm(
+                            total=len(names),
+                            desc=info["file_name"],
+                            leave=True
+                        )
+                    else:
+                        self.image_bar.reset(total=len(names))
+                        self.image_bar.set_description(info["file_name"])
 
                     for name in names:
                         try:
                             data = zf.read(name)
                             image = Image.open(io.BytesIO(data)).convert("RGB")
                             yield image
-                            image_bar.update(1)
+                            self.image_bar.update(1)
                         except Exception:
-                            image_bar.update(1)
-
-                    image_bar.close()
+                            self.image_bar.update(1)
 
             finally:
                 try:
@@ -195,10 +200,7 @@ class GastroNetCortexDataset(IterableDataset):
                 except FileNotFoundError:
                     pass
 
-            shard_bar.update(1)
-
-        shard_bar.close()
-
+            self.shard_bar.update(1)
 
 class CortexDataLoader(DataLoader):
     def __init__(self, dataset, batch_size, **kwargs):
