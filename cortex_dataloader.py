@@ -19,11 +19,65 @@ class CortexSession:
         r.raise_for_status()
         login_page_url = r.url
         token = login_page_url.rstrip("/").split("/")[-1]
-        b = self.session.get(f"{BASE_URL}/api/bootstrap/", headers={"Referer": login_page_url}, timeout=60)
+
+        b = self.session.get(
+            f"{BASE_URL}/api/bootstrap/",
+            headers={
+                "Origin": BASE_URL,
+                "Referer": login_page_url,
+            },
+            timeout=60,
+        )
         b.raise_for_status()
         self.csrf = b.json()["csrf_token"]
-        r = self.session.post(f"{BASE_URL}/api/request/login/", json={"token": token}, headers={"X-Csrftoken": self.csrf, "Origin": BASE_URL, "Referer": login_page_url}, timeout=60)
+
+        r = self.session.post(
+            f"{BASE_URL}/api/request/login/",
+            json={"token": token},
+            headers={
+                "X-Csrftoken": self.csrf,
+                "Origin": BASE_URL,
+                "Referer": login_page_url,
+            },
+            timeout=60,
+        )
         r.raise_for_status()
+
+        b = self.session.get(
+            f"{BASE_URL}/api/bootstrap/",
+            headers={
+                "Origin": BASE_URL,
+                "Referer": f"{BASE_URL}/dataset-provider/request/download/",
+            },
+            timeout=60,
+        )
+        b.raise_for_status()
+        self.csrf = b.json()["csrf_token"]
+
+    def get_download_url(self, file_id):
+        endpoint = f"{BASE_URL}/api/provided_file/{file_id}/download_url/"
+
+        for attempt in range(2):
+            r = self.session.post(
+                endpoint,
+                headers={
+                    "X-Csrftoken": self.csrf,
+                    "Origin": BASE_URL,
+                    "Referer": f"{BASE_URL}/dataset-provider/request/download/",
+                },
+                timeout=60,
+            )
+
+            if r.status_code == 200:
+                return r.json()["url"]
+
+            print(f"[Cortex] download_url HTTP {r.status_code}: {r.text[:300]}", flush=True)
+
+            if r.status_code == 403 and attempt == 0:
+                self.login()
+                continue
+
+            r.raise_for_status()
 
     def headers(self):
         return {"X-Csrftoken": self.csrf, "Origin": BASE_URL, "Referer": f"{BASE_URL}/dataset-provider/request/download/"}
@@ -35,13 +89,13 @@ class CortexSession:
         files.sort(key=lambda x: x["file_name"])
         return files
 
-    def get_download_url(self, file_id):
-        r = self.session.post(f"{BASE_URL}/api/provided_file/{file_id}/download_url/", headers=self.headers(), timeout=60)
-        if r.status_code == 403:
-            self.login()
-            r = self.session.post(f"{BASE_URL}/api/provided_file/{file_id}/download_url/", headers=self.headers(), timeout=60)
-        r.raise_for_status()
-        return r.json()["url"]
+    # def get_download_url(self, file_id):
+    #     r = self.session.post(f"{BASE_URL}/api/provided_file/{file_id}/download_url/", headers=self.headers(), timeout=60)
+    #     if r.status_code == 403:
+    #         self.login()
+    #         r = self.session.post(f"{BASE_URL}/api/provided_file/{file_id}/download_url/", headers=self.headers(), timeout=60)
+    #     r.raise_for_status()
+    #     return r.json()["url"]
 
 
 class GastroNetCortexDataset(IterableDataset):
