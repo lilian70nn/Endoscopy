@@ -1,5 +1,6 @@
 import os, io, math, random, zipfile, subprocess, requests
 from pathlib import Path
+from tqdm import tqdm
 from PIL import Image
 from torch.utils.data import IterableDataset, DataLoader
 
@@ -111,45 +112,92 @@ class GastroNetCortexDataset(IterableDataset):
     def download_shard(self, cortex, info):
         path = self.cache_dir / info["file_name"]
         expected_size = int(info["size"])
+
         if path.exists() and path.stat().st_size == expected_size:
             return path
+
         url = cortex.get_download_url(info["id"])
-        cmd = ["curl", "-L", "--fail", "--retry", "5", "--retry-delay", "5", "--connect-timeout", "30", "-C", "-", "-o", str(path), url]
+
+        cmd = [
+            "curl", "-L", "--fail", "--silent", "--show-error",
+            "--retry", "5", "--retry-delay", "5",
+            "--connect-timeout", "30",
+            "-C", "-", "-o", str(path), url
+        ]
+
         result = subprocess.run(cmd)
+
         if result.returncode != 0:
             if path.exists() and path.stat().st_size >= expected_size:
                 return path
             raise RuntimeError(f"Download failed: {info['file_name']}")
+
         if path.stat().st_size != expected_size:
-            raise RuntimeError(f"Wrong file size: {info['file_name']} got {path.stat().st_size}, expected {expected_size}")
+            raise RuntimeError(
+                f"Wrong file size: {info['file_name']} "
+                f"got {path.stat().st_size}, expected {expected_size}"
+            )
+
         return path
 
     def __iter__(self):
         cortex = CortexSession(self.access_url)
         shards = cortex.get_files()
         rng = random.Random(self.seed)
+
         if self.shuffle_shards:
             rng.shuffle(shards)
 
+        shard_bar = tqdm(
+            total=len(shards),
+            desc="Shards",
+            position=1,
+            leave=False,
+            dynamic_ncols=True
+        )
+
         for info in shards:
             path = self.download_shard(cortex, info)
+
             try:
                 with zipfile.ZipFile(path, "r") as zf:
-                    names = [n for n in zf.namelist() if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.endswith("/")]
+                    names = [
+                        n for n in zf.namelist()
+                        if n.lower().endswith((".png", ".jpg", ".jpeg"))
+                        and not n.endswith("/")
+                    ]
+
                     if self.shuffle_images:
                         rng.shuffle(names)
+
+                    image_bar = tqdm(
+                        total=len(names),
+                        desc=info["file_name"],
+                        position=2,
+                        leave=False,
+                        dynamic_ncols=True
+                    )
+
                     for name in names:
                         try:
                             data = zf.read(name)
                             image = Image.open(io.BytesIO(data)).convert("RGB")
                             yield image
-                        except Exception as e:
-                            print(f"[WARN] skip {info['file_name']}:{name}: {e}", flush=True)
+                            image_bar.update(1)
+                        except Exception:
+                            image_bar.update(1)
+
+                    image_bar.close()
+
             finally:
                 try:
                     path.unlink()
                 except FileNotFoundError:
                     pass
+
+            shard_bar.update(1)
+
+        shard_bar.close()
 
 
 class CortexDataLoader(DataLoader):

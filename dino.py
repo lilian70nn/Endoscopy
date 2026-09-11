@@ -16,6 +16,7 @@ import csv
 import math
 import random
 from pathlib import Path
+from tqdm import tqdm
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 import torch
@@ -30,7 +31,7 @@ import lightning.pytorch as pl
 # Default DINOv1 settings: based on the Meta repo provided
 
 DINO_DEFAULTS = {
-    "epochs": 100,
+    "epochs": 3,
     "out_dim": 65536,
     "hidden_dim": 2048,
     "bottleneck_dim": 256,
@@ -259,6 +260,7 @@ class DINOTrainer(pl.LightningModule):
         self.lr_schedule = cosine_schedule(cfg["lr"], cfg["min_lr"], total_steps, warmup_steps)
         self.wd_schedule = cosine_schedule(cfg["weight_decay"], cfg["weight_decay_end"], total_steps)
         self.momentum_schedule = cosine_schedule(cfg["momentum_teacher"], 1.0, total_steps)
+        self.epoch_bar = None
 
     def configure_optimizers(self):
         return torch.optim.AdamW(get_params_groups(self.student), lr=self.cfg["lr"])
@@ -280,6 +282,12 @@ class DINOTrainer(pl.LightningModule):
         with torch.no_grad(): teacher_output = self.teacher(images[:2])
         student_output = self.student(images)
         loss = self.dino_loss(student_output, teacher_output, self.current_epoch)
+        if self.epoch_bar is not None:
+            self.epoch_bar.set_postfix(
+                loss=f"{loss.detach().item():.4f}",
+                lr=f"{float(self.lr_schedule[step]):.2e}",
+                m=f"{float(self.momentum_schedule[step]):.4f}"
+            )
         optimizer.zero_grad()
         self.manual_backward(loss)
         if self.cfg["clip_grad"] > 0: clip_gradients(self.student, self.cfg["clip_grad"])
@@ -299,17 +307,18 @@ class DINOTrainer(pl.LightningModule):
         if self.global_rank != 0:
             return
 
+        if self.epoch_bar is not None:
+            self.epoch_bar.update(1)
+
         output_dir = Path(self.cfg["output_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
         epoch = self.current_epoch + 1
 
-        # Save teacher vision encoder checkpoint
         torch.save({
             "epoch": epoch,
             "model": self.teacher.backbone.state_dict()
         }, output_dir / f"checkpoint_epoch_{epoch}.pth")
 
-        # Save training metrics
         train_loss = self.trainer.callback_metrics.get("train_loss_epoch")
         log_file = output_dir / "training_log.csv"
         write_header = not log_file.exists()
@@ -325,6 +334,24 @@ class DINOTrainer(pl.LightningModule):
                 float(self.momentum_schedule[min(epoch * self.steps_per_epoch - 1, len(self.momentum_schedule) - 1)])
             ])
 
+    def on_train_start(self):
+        if self.global_rank == 0:
+            self.epoch_bar = tqdm(
+                total=self.cfg["epochs"],
+                desc="Epoch",
+                position=0,
+                leave=True,
+                dynamic_ncols=True
+            )
+
+    def on_train_epoch_start(self):
+        if self.epoch_bar is not None:
+            self.epoch_bar.set_description(f"Epoch {self.current_epoch + 1}/{self.cfg['epochs']}")
+
+    def on_train_end(self):
+        if self.epoch_bar is not None:
+            self.epoch_bar.close()
+
 
 
 # Public function: DINO pre-training
@@ -334,22 +361,8 @@ def train_dino(model, dataloader, config=None):
     if config is not None: cfg.update(config)
     pl.seed_everything(0, workers=True)
 
-    first_batch = next(iter(dataloader))
-    if isinstance(first_batch, dict): sample = first_batch["image"][0]
-    elif isinstance(first_batch, tuple): sample = first_batch[0][0]
-    else: sample = first_batch[0]
-
-    augmentation = DataAugmentationDINO(cfg["global_crops_scale"], cfg["local_crops_scale"], cfg["local_crops_number"])
-    sample_tensor = augmentation(sample.convert("RGB") if isinstance(sample, Image.Image) else sample)[0].unsqueeze(0)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    probe_model = copy.deepcopy(model).to(device).eval()
-
-    with torch.no_grad():
-        feature_dim = run_backbone(probe_model, sample_tensor.to(device)).shape[-1]
-
-    del probe_model
+    feature_dim = model.config.hidden_size
 
     module = DINOTrainer(model, feature_dim, len(dataloader), cfg)
-    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="auto", devices=1, precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, log_every_n_steps=10)
+    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="auto", devices=1, precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
     trainer.fit(module, train_dataloaders=dataloader)
