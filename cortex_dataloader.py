@@ -189,8 +189,8 @@ class GastroNetCortexDataset(IterableDataset):
                         try:
                             data = zf.read(name)
                             image = Image.open(io.BytesIO(data)).convert("RGB")
-                            yield image
                             self.image_bar.update(1)
+                            yield image
                         except Exception:
                             self.image_bar.update(1)
 
