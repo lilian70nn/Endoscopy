@@ -7,8 +7,8 @@ Shared utilities for:
 
 
 import torch
-from datasets import load_dataset
-from torch.utils.data import DataLoader
+# from datasets import load_dataset
+# from torch.utils.data import DataLoader
 
 from transformers import AutoConfig, AutoModel
 from torchvision.models import vit_b_16, ViT_B_16_Weights
@@ -89,24 +89,24 @@ def initialize_siglip2(initialization="siglip2"):
 
 
 
-def initialize_dataloader(batch_size=64):
+# def initialize_dataloader(batch_size=64):
 
-    # Load raw images only.
-    # SSL-specific augmentation is handled inside the training method.
+#     # Load raw images only.
+#     # SSL-specific augmentation is handled inside the training method.
 
-    dataset = load_dataset(
-        "BONS-AI-TUE-AMC/GastroNet5M",
-        split="train"
-    )
+#     dataset = load_dataset(
+#         "BONS-AI-TUE-AMC/GastroNet5M",
+#         split="train"
+#     )
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=lambda batch: [item["image"] for item in batch]
-    )
+#     dataloader = DataLoader(
+#         dataset,
+#         batch_size=batch_size,
+#         shuffle=True,
+#         collate_fn=lambda batch: [item["image"] for item in batch]
+#     )
 
-    return dataloader
+#     return dataloader
 
 def load_trained_model(initialization, checkpoint_path):
     model = initialize_siglip2(initialization=initialization)
@@ -115,3 +115,4 @@ def load_trained_model(initialization, checkpoint_path):
     model.load_state_dict(checkpoint["model"])
 
     return model
+    

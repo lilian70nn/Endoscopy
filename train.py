@@ -7,7 +7,9 @@ Runs DINOv1 and LeJEPA with:
 """
 
 
-from utils import initialize_siglip2, initialize_dataloader
+from utils import initialize_siglip2
+from cortex_dataloader import initialize_dataloader
+
 from dino import train_dino
 #from lejepa import train_lejepa
 
