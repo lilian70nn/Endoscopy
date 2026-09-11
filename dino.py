@@ -31,7 +31,7 @@ import lightning.pytorch as pl
 # Default DINOv1 settings: based on the Meta repo provided
 
 DINO_DEFAULTS = {
-    "epochs": 3,
+    "epochs": 5,
     "out_dim": 65536,
     "hidden_dim": 2048,
     "bottleneck_dim": 256,
