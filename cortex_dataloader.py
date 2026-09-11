@@ -119,29 +119,24 @@ class GastroNetCortexDataset(IterableDataset):
         if path.exists() and path.stat().st_size == expected_size:
             return path
 
-        url = cortex.get_download_url(info["id"])
+        for attempt in range(10):
+            url = cortex.get_download_url(info["id"])
 
-        cmd = [
-            "curl", "-L", "--fail", "--silent", "--show-error",
-            "--retry", "5", "--retry-delay", "5",
-            "--connect-timeout", "30",
-            "-C", "-", "-o", str(path), url
-        ]
+            result = subprocess.run([
+                "curl",
+                "-L",
+                "--fail",
+                "--show-error",
+                "--connect-timeout", "30",
+                "-C", "-",
+                "-o", str(path),
+                url,
+            ])
 
-        result = subprocess.run(cmd)
-
-        if result.returncode != 0:
-            if path.exists() and path.stat().st_size >= expected_size:
+            if path.exists() and path.stat().st_size == expected_size:
                 return path
-            raise RuntimeError(f"Download failed: {info['file_name']}")
 
-        if path.stat().st_size != expected_size:
-            raise RuntimeError(
-                f"Wrong file size: {info['file_name']} "
-                f"got {path.stat().st_size}, expected {expected_size}"
-            )
-
-        return path
+        raise RuntimeError(f"Download failed: {info['file_name']}")
 
     def __iter__(self):
         cortex = CortexSession(self.access_url)
