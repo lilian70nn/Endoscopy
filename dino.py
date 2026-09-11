@@ -51,6 +51,7 @@ DINO_DEFAULTS = {
     "weight_decay_end": 0.4,
     "clip_grad": 3.0,
     "freeze_last_layer": 1,
+    "accumulate_grad_batches": 8,
     "norm_last_layer": True,
     "output_dir": "./dino_output"
 }
@@ -288,15 +289,20 @@ class DINOTrainer(pl.LightningModule):
                 lr=f"{float(self.lr_schedule[step]):.2e}",
                 m=f"{float(self.momentum_schedule[step]):.4f}"
             )
-        optimizer.zero_grad()
-        self.manual_backward(loss)
-        if self.cfg["clip_grad"] > 0: clip_gradients(self.student, self.cfg["clip_grad"])
-        cancel_gradients_last_layer(self.current_epoch, self.student, self.cfg["freeze_last_layer"])
-        optimizer.step()
-        with torch.no_grad():
-            m = float(self.momentum_schedule[step])
-            for student_param, teacher_param in zip(self.student.parameters(), self.teacher.parameters()):
-                teacher_param.data.mul_(m).add_(student_param.detach().data, alpha=1.0 - m)
+        accum_steps = self.cfg["accumulate_grad_batches"]
+        if batch_idx % accum_steps == 0:
+            optimizer.zero_grad()
+        self.manual_backward(loss / accum_steps)
+        should_step = (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == self.steps_per_epoch
+        if should_step:
+            if self.cfg["clip_grad"] > 0: 
+                clip_gradients(self.student, self.cfg["clip_grad"])
+            cancel_gradients_last_layer(self.current_epoch, self.student, self.cfg["freeze_last_layer"])
+            optimizer.step()
+            with torch.no_grad():
+                m = float(self.momentum_schedule[step])
+                for student_param, teacher_param in zip(self.student.parameters(), self.teacher.parameters()):
+                    teacher_param.data.mul_(m).add_(student_param.detach().data, alpha=1.0 - m)
         batch_size = len(batch)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
         self.log("lr", float(self.lr_schedule[step]), prog_bar=False)
