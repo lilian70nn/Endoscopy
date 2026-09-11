@@ -1,6 +1,6 @@
 import os, io, math, random, zipfile, subprocess, requests
 from pathlib import Path
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from PIL import Image
 from torch.utils.data import IterableDataset, DataLoader
 
@@ -214,6 +214,6 @@ def initialize_dataloader(batch_size=64, cache_dir="./cortex_cache"):
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
 
-    dataset = GastroNetCortexDataset(access_url=access_url, cache_dir=cache_dir, shuffle_shards=True, shuffle_images=True)
+    dataset = GastroNetCortexDataset(access_url=access_url, cache_dir=cache_dir, shuffle_shards=False, shuffle_images=True)
 
     return CortexDataLoader(dataset, batch_size=batch_size, num_workers=0, drop_last=True, collate_fn=lambda batch: batch)

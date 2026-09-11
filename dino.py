@@ -16,7 +16,7 @@ import csv
 import math
 import random
 from pathlib import Path
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 import torch
