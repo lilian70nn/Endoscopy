@@ -46,7 +46,7 @@ DINO_DEFAULTS = {
     "momentum_teacher": 0.996,
     "lr": 5e-4,
     "min_lr": 1e-6,
-    "warmup_epochs": 10,
+    "warmup_epochs": 1,
     "weight_decay": 0.04,
     "weight_decay_end": 0.4,
     "clip_grad": 3.0,

@@ -18,9 +18,9 @@ def main():
     dataloader = initialize_dataloader(batch_size=64)
 
     experiments = [
-        # ("dino", "siglip2"),
-        # ("dino", "imagenet"),
-        #("lejepa", "siglip2"),
+        ("dino", "siglip2"),
+        ("dino", "imagenet"),
+        ("lejepa", "siglip2"),
         ("lejepa", "imagenet"),
     ]
 

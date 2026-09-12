@@ -32,7 +32,7 @@ LEJEPA_DEFAULTS = {
     "local_crops_scale": (0.05, 0.4),
     "lr": 5e-4,
     "min_lr": 1e-6,
-    "warmup_epochs": 10,
+    "warmup_epochs": 1,
     "weight_decay": 0.01,
     "accumulate_grad_batches": 8,
     "output_dir": "./lejepa_output"
