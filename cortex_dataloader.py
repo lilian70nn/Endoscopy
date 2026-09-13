@@ -206,7 +206,7 @@ class CortexDataLoader(DataLoader):
         return NUM_IMAGES // self._batch_size_for_len
 
 
-def initialize_dataloader(batch_size=64, cache_dir="./cortex_cache"):
+def initialize_dataloader(batch_size=256, cache_dir="./cortex_cache"):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
