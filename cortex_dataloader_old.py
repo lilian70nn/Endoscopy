@@ -9,7 +9,6 @@ BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
 NUM_IMAGES = 4_820_653
 
-
 class CortexSession:
     def __init__(self, access_url):
         self.access_url = access_url
@@ -25,7 +24,10 @@ class CortexSession:
 
         b = self.session.get(
             f"{BASE_URL}/api/bootstrap/",
-            headers={"Origin": BASE_URL, "Referer": login_page_url},
+            headers={
+                "Origin": BASE_URL,
+                "Referer": login_page_url,
+            },
             timeout=60,
         )
         b.raise_for_status()
@@ -34,14 +36,21 @@ class CortexSession:
         r = self.session.post(
             f"{BASE_URL}/api/request/login/",
             json={"token": token},
-            headers={"X-Csrftoken": self.csrf, "Origin": BASE_URL, "Referer": login_page_url},
+            headers={
+                "X-Csrftoken": self.csrf,
+                "Origin": BASE_URL,
+                "Referer": login_page_url,
+            },
             timeout=60,
         )
         r.raise_for_status()
 
         b = self.session.get(
             f"{BASE_URL}/api/bootstrap/",
-            headers={"Origin": BASE_URL, "Referer": f"{BASE_URL}/dataset-provider/request/download/"},
+            headers={
+                "Origin": BASE_URL,
+                "Referer": f"{BASE_URL}/dataset-provider/request/download/",
+            },
             timeout=60,
         )
         b.raise_for_status()
@@ -72,29 +81,27 @@ class CortexSession:
 
             r.raise_for_status()
 
+    def headers(self):
+        return {"X-Csrftoken": self.csrf, "Origin": BASE_URL, "Referer": f"{BASE_URL}/dataset-provider/request/download/"}
+
     def get_files(self):
-        r = self.session.get(
-            f"{BASE_URL}/api/provided_file/",
-            params={"limit": 10000, "provided_dataset": DATASET_ID},
-            timeout=60,
-        )
+        r = self.session.get(f"{BASE_URL}/api/provided_file/", params={"limit": 10000, "provided_dataset": DATASET_ID}, timeout=60)
         r.raise_for_status()
         files = r.json()["data"]
         files.sort(key=lambda x: x["file_name"])
         return files
 
+    # def get_download_url(self, file_id):
+    #     r = self.session.post(f"{BASE_URL}/api/provided_file/{file_id}/download_url/", headers=self.headers(), timeout=60)
+    #     if r.status_code == 403:
+    #         self.login()
+    #         r = self.session.post(f"{BASE_URL}/api/provided_file/{file_id}/download_url/", headers=self.headers(), timeout=60)
+    #     r.raise_for_status()
+    #     return r.json()["url"]
+
 
 class GastroNetCortexDataset(IterableDataset):
-    def __init__(
-        self,
-        access_url,
-        cache_dir="./cortex_cache",
-        shuffle_shards=True,
-        shuffle_images=True,
-        seed=42,
-        decode_workers=4,
-        prefetch_size=1024,
-    ):
+    def __init__(self, access_url, cache_dir="./cortex_cache", shuffle_shards=True, shuffle_images=True, seed=42):
         super().__init__()
         self.access_url = access_url
         self.cache_dir = Path(cache_dir)
@@ -102,8 +109,7 @@ class GastroNetCortexDataset(IterableDataset):
         self.shuffle_shards = shuffle_shards
         self.shuffle_images = shuffle_images
         self.seed = seed
-        self.decode_workers = decode_workers
-        self.prefetch_size = prefetch_size
+
         self.shard_bar = None
         self.image_bar = None
 
@@ -117,7 +123,7 @@ class GastroNetCortexDataset(IterableDataset):
         for attempt in range(10):
             url = cortex.get_download_url(info["id"])
 
-            subprocess.run([
+            result = subprocess.run([
                 "curl",
                 "-L",
                 "--fail",
@@ -132,15 +138,6 @@ class GastroNetCortexDataset(IterableDataset):
                 return path
 
         raise RuntimeError(f"Download failed: {info['file_name']}")
-
-    @staticmethod
-    def decode_image(item):
-        name, data = item
-        try:
-            image = Image.open(io.BytesIO(data)).convert("RGB")
-            return name, image, None
-        except Exception as e:
-            return name, None, e
 
     def __iter__(self):
         cortex = CortexSession(self.access_url)
@@ -159,21 +156,18 @@ class GastroNetCortexDataset(IterableDataset):
             self.shard_bar.reset(total=len(shards))
             self.shard_bar.set_description("Shards")
 
-        with ThreadPoolExecutor(max_workers=1) as download_pool, ThreadPoolExecutor(max_workers=self.decode_workers) as decode_pool:
-            future = download_pool.submit(self.download_shard, cortex, shards[0])
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self.download_shard, cortex, shards[0])
 
             for i, info in enumerate(shards):
                 path = future.result()
 
                 if i + 1 < len(shards):
-                    future = download_pool.submit(self.download_shard, cortex, shards[i + 1])
+                    future = executor.submit(self.download_shard, cortex, shards[i + 1])
 
                 try:
                     with zipfile.ZipFile(path, "r") as zf:
-                        names = [
-                            n for n in zf.namelist()
-                            if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.endswith("/")
-                        ]
+                        names = [n for n in zf.namelist() if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.endswith("/")]
 
                         if self.shuffle_images:
                             rng.shuffle(names)
@@ -184,25 +178,15 @@ class GastroNetCortexDataset(IterableDataset):
                             self.image_bar.reset(total=len(names))
                             self.image_bar.set_description(info["file_name"])
 
-                        for start in range(0, len(names), self.prefetch_size):
-                            chunk_names = names[start:start + self.prefetch_size]
-                            items = []
-
-                            for name in chunk_names:
-                                try:
-                                    items.append((name, zf.read(name)))
-                                except Exception as e:
-                                    self.image_bar.update(1)
-                                    print(f"[Cortex] Failed to read {name} from {info['file_name']}: {e}", flush=True)
-
-                            for name, image, error in decode_pool.map(self.decode_image, items):
+                        for name in names:
+                            try:
+                                data = zf.read(name)
+                                image = Image.open(io.BytesIO(data)).convert("RGB")
                                 self.image_bar.update(1)
-
-                                if error is not None:
-                                    print(f"[Cortex] Failed to decode {name} from {info['file_name']}: {error}", flush=True)
-                                    continue
-
                                 yield image
+                            except Exception as e:
+                                self.image_bar.update(1)
+                                print(f"[Cortex] Failed to read {name} from {info['file_name']}: {e}", flush=True)
 
                 finally:
                     try:
@@ -211,7 +195,6 @@ class GastroNetCortexDataset(IterableDataset):
                         pass
 
                 self.shard_bar.update(1)
-
 
 class CortexDataLoader(DataLoader):
     def __init__(self, dataset, batch_size, **kwargs):
@@ -224,23 +207,9 @@ class CortexDataLoader(DataLoader):
 
 def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
-
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
 
-    dataset = GastroNetCortexDataset(
-        access_url=access_url,
-        cache_dir=cache_dir,
-        shuffle_shards=False,
-        shuffle_images=True,
-        decode_workers=4,
-        prefetch_size=1024,
-    )
+    dataset = GastroNetCortexDataset(access_url=access_url, cache_dir=cache_dir, shuffle_shards=False, shuffle_images=True)
 
-    return CortexDataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=0,
-        drop_last=True,
-        collate_fn=lambda batch: batch,
-    )
+    return CortexDataLoader(dataset, batch_size=batch_size, num_workers=0, drop_last=True, collate_fn=lambda batch: batch)

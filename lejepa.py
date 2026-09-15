@@ -34,7 +34,7 @@ LEJEPA_DEFAULTS = {
     "min_lr": 1e-6,
     "warmup_epochs": 1,
     "weight_decay": 0.01,
-    "accumulate_grad_batches": 8,
+    "accumulate_grad_batches": 4,
     "output_dir": "./lejepa_output"
 }
 
