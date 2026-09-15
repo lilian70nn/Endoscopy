@@ -4,6 +4,8 @@ from tqdm.auto import tqdm
 from PIL import Image
 from torch.utils.data import IterableDataset, DataLoader
 from concurrent.futures import ThreadPoolExecutor
+import queue
+import threading
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
@@ -82,6 +84,40 @@ class CortexSession:
         files = r.json()["data"]
         files.sort(key=lambda x: x["file_name"])
         return files
+
+
+class PrefetchDataLoader:
+    def __init__(self, dataloader, prefetch_batches=2):
+        self.dataloader = dataloader
+        self.prefetch_batches = prefetch_batches
+
+    def __len__(self):
+        return len(self.dataloader)
+
+    def __iter__(self):
+        q = queue.Queue(maxsize=self.prefetch_batches)
+        sentinel = object()
+
+        def producer():
+            try:
+                for batch in self.dataloader:
+                    q.put(batch)
+            except Exception as e:
+                q.put(e)
+            finally:
+                q.put(sentinel)
+
+        thread = threading.Thread(target=producer, daemon=True)
+        thread.start()
+
+        while True:
+            item = q.get()
+            if item is sentinel:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
 
 
 class GastroNetCortexDataset(IterableDataset):
@@ -224,7 +260,6 @@ class CortexDataLoader(DataLoader):
 
 def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
-
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
 
@@ -237,10 +272,12 @@ def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
         prefetch_size=1024,
     )
 
-    return CortexDataLoader(
+    dataloader = CortexDataLoader(
         dataset,
         batch_size=batch_size,
         num_workers=0,
         drop_last=True,
         collate_fn=lambda batch: batch,
     )
+
+    return PrefetchDataLoader(dataloader, prefetch_batches=2)
