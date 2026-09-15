@@ -1,8 +1,9 @@
-import os, io, math, random, zipfile, subprocess, requests
+import os, io, random, zipfile, subprocess, requests
 from pathlib import Path
 from tqdm.auto import tqdm
 from PIL import Image
 from torch.utils.data import IterableDataset, DataLoader
+from concurrent.futures import ThreadPoolExecutor
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
@@ -146,56 +147,54 @@ class GastroNetCortexDataset(IterableDataset):
         if self.shuffle_shards:
             rng.shuffle(shards)
 
+        if not shards:
+            raise RuntimeError("No Cortex shards found")
+
         if self.shard_bar is None:
-            self.shard_bar = tqdm(
-                total=len(shards),
-                desc="Shards",
-                leave=True
-            )
+            self.shard_bar = tqdm(total=len(shards), desc="Shards", leave=True)
         else:
             self.shard_bar.reset(total=len(shards))
             self.shard_bar.set_description("Shards")
 
-        for info in shards:
-            path = self.download_shard(cortex, info)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self.download_shard, cortex, shards[0])
 
-            try:
-                with zipfile.ZipFile(path, "r") as zf:
-                    names = [
-                        n for n in zf.namelist()
-                        if n.lower().endswith((".png", ".jpg", ".jpeg"))
-                        and not n.endswith("/")
-                    ]
+            for i, info in enumerate(shards):
+                path = future.result()
 
-                    if self.shuffle_images:
-                        rng.shuffle(names)
+                if i + 1 < len(shards):
+                    future = executor.submit(self.download_shard, cortex, shards[i + 1])
 
-                    if self.image_bar is None:
-                        self.image_bar = tqdm(
-                            total=len(names),
-                            desc=info["file_name"],
-                            leave=True
-                        )
-                    else:
-                        self.image_bar.reset(total=len(names))
-                        self.image_bar.set_description(info["file_name"])
-
-                    for name in names:
-                        try:
-                            data = zf.read(name)
-                            image = Image.open(io.BytesIO(data)).convert("RGB")
-                            self.image_bar.update(1)
-                            yield image
-                        except Exception:
-                            self.image_bar.update(1)
-
-            finally:
                 try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
+                    with zipfile.ZipFile(path, "r") as zf:
+                        names = [n for n in zf.namelist() if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.endswith("/")]
 
-            self.shard_bar.update(1)
+                        if self.shuffle_images:
+                            rng.shuffle(names)
+
+                        if self.image_bar is None:
+                            self.image_bar = tqdm(total=len(names), desc=info["file_name"], leave=True)
+                        else:
+                            self.image_bar.reset(total=len(names))
+                            self.image_bar.set_description(info["file_name"])
+
+                        for name in names:
+                            try:
+                                data = zf.read(name)
+                                image = Image.open(io.BytesIO(data)).convert("RGB")
+                                self.image_bar.update(1)
+                                yield image
+                            except Exception as e:
+                                self.image_bar.update(1)
+                                print(f"[Cortex] Failed to read {name} from {info['file_name']}: {e}", flush=True)
+
+                finally:
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+
+                self.shard_bar.update(1)
 
 class CortexDataLoader(DataLoader):
     def __init__(self, dataset, batch_size, **kwargs):
@@ -206,7 +205,7 @@ class CortexDataLoader(DataLoader):
         return NUM_IMAGES // self._batch_size_for_len
 
 
-def initialize_dataloader(batch_size=256, cache_dir="./cortex_cache"):
+def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
