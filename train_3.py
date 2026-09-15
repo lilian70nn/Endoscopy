@@ -19,8 +19,8 @@ def main():
 
     experiments = [
         # ("dino", "siglip2"),
-        ("dino", "imagenet"),
-        # ("lejepa", "siglip2"),
+        # ("dino", "imagenet"),
+        ("lejepa", "siglip2"),
         # ("lejepa", "imagenet"),
     ]
 

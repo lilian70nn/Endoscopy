@@ -19,9 +19,9 @@ def main():
 
     experiments = [
         # ("dino", "siglip2"),
-        ("dino", "imagenet"),
+        # ("dino", "imagenet"),
         # ("lejepa", "siglip2"),
-        # ("lejepa", "imagenet"),
+        ("lejepa", "imagenet"),
     ]
 
     for ssl_method, initialization in experiments:
