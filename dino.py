@@ -51,7 +51,7 @@ DINO_DEFAULTS = {
     "weight_decay_end": 0.4,
     "clip_grad": 3.0,
     "freeze_last_layer": 1,
-    "accumulate_grad_batches": 4,
+    "accumulate_grad_batches": 8,
     "norm_last_layer": True,
     "output_dir": "./dino_output"
 }
