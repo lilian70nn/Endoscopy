@@ -32,10 +32,10 @@ import lightning.pytorch as pl
 
 DINO_DEFAULTS = {
     "epochs": 5,
-    "out_dim": 65536,
+    "out_dim": 9600,
     "hidden_dim": 2048,
     "bottleneck_dim": 256,
-    "local_crops_number": 8,
+    "local_crops_number": 6,
     "global_crops_scale": (0.4, 1.0),
     "local_crops_scale": (0.05, 0.4),
     "student_temp": 0.1,
@@ -51,7 +51,7 @@ DINO_DEFAULTS = {
     "weight_decay_end": 0.4,
     "clip_grad": 3.0,
     "freeze_last_layer": 1,
-    "accumulate_grad_batches": 8,
+    "accumulate_grad_batches": 1,
     "norm_last_layer": True,
     "output_dir": "./dino_output"
 }
