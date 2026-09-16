@@ -53,7 +53,7 @@ DINO_DEFAULTS = {
     "freeze_last_layer": 1,
     "accumulate_grad_batches": 1,
     "norm_last_layer": True,
-    "devices": 4,
+    "devices": 8,
     "output_dir": "./dino_output"
 }
 

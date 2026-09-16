@@ -15,7 +15,7 @@ from lejepa import train_lejepa
 
 
 def main():
-    dataloader = initialize_dataloader(batch_size=300)
+    dataloader = initialize_dataloader(batch_size=300, devices=8)
 
     experiments = [
         # ("dino", "siglip2"),
