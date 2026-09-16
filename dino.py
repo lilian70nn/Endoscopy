@@ -53,6 +53,7 @@ DINO_DEFAULTS = {
     "freeze_last_layer": 1,
     "accumulate_grad_batches": 1,
     "norm_last_layer": True,
+    "devices": 4,
     "output_dir": "./dino_output"
 }
 
@@ -370,5 +371,5 @@ def train_dino(model, dataloader, config=None):
     feature_dim = model.config.hidden_size
 
     module = DINOTrainer(model, feature_dim, len(dataloader), cfg)
-    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="auto", devices=1, precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
+    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="gpu" if torch.cuda.is_available() else "cpu", devices=cfg.get("devices", 1), strategy="ddp" if cfg.get("devices", 1) > 1 else "auto", precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
     trainer.fit(module, train_dataloaders=dataloader)

@@ -6,6 +6,7 @@ from torch.utils.data import IterableDataset, DataLoader
 from concurrent.futures import ThreadPoolExecutor
 import queue
 import threading
+import torch.distributed as dist
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
@@ -87,12 +88,17 @@ class CortexSession:
 
 
 class PrefetchDataLoader:
-    def __init__(self, dataloader, prefetch_batches=2):
+    def __init__(self, dataloader, prefetch_batches=2, devices=1):
         self.dataloader = dataloader
         self.prefetch_batches = prefetch_batches
+        self.devices = devices
 
     def __len__(self):
-        return len(self.dataloader)
+        return NUM_IMAGES // (self.dataloader.batch_size * self.devices)
+
+    @property
+    def batch_size(self):
+        return self.dataloader.batch_size
 
     def __iter__(self):
         q = queue.Queue(maxsize=self.prefetch_batches)
@@ -120,17 +126,9 @@ class PrefetchDataLoader:
 
 
 
+
 class GastroNetCortexDataset(IterableDataset):
-    def __init__(
-        self,
-        access_url,
-        cache_dir="./cortex_cache",
-        shuffle_shards=True,
-        shuffle_images=True,
-        seed=42,
-        decode_workers=4,
-        prefetch_size=1024,
-    ):
+    def __init__(self, access_url, cache_dir="./cortex_cache", shuffle_shards=True, shuffle_images=True, seed=42, decode_workers=4, prefetch_size=1024):
         super().__init__()
         self.access_url = access_url
         self.cache_dir = Path(cache_dir)
@@ -186,8 +184,12 @@ class GastroNetCortexDataset(IterableDataset):
         if self.shuffle_shards:
             rng.shuffle(shards)
 
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        shards = shards[rank::world_size]
+
         if not shards:
-            raise RuntimeError("No Cortex shards found")
+            raise RuntimeError(f"No Cortex shards found for rank {rank}")
 
         if self.shard_bar is None:
             self.shard_bar = tqdm(total=len(shards), desc="Shards", leave=True)
@@ -255,10 +257,11 @@ class CortexDataLoader(DataLoader):
         super().__init__(dataset, batch_size=batch_size, **kwargs)
 
     def __len__(self):
-        return NUM_IMAGES // self._batch_size_for_len
+        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        return NUM_IMAGES // (self._batch_size_for_len * world_size)
 
 
-def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
+def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache", devices=4):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
@@ -280,4 +283,4 @@ def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
         collate_fn=lambda batch: batch,
     )
 
-    return PrefetchDataLoader(dataloader, prefetch_batches=2)
+    return PrefetchDataLoader(dataloader, prefetch_batches=2, devices=devices)

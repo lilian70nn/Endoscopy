@@ -19,6 +19,7 @@ import torch
 import torch.distributed as dist
 import lightning.pytorch as pl
 from torchvision import transforms
+from torch.distributed.nn.functional import all_reduce
 
 
 # Default LeJEPA settings
@@ -34,7 +35,8 @@ LEJEPA_DEFAULTS = {
     "min_lr": 1e-6,
     "warmup_epochs": 1,
     "weight_decay": 0.01,
-    "accumulate_grad_batches": 8,
+    "accumulate_grad_batches": 1,
+    "devices": 4,
     "output_dir": "./lejepa_output"
 }
 
@@ -87,23 +89,25 @@ def sigreg(x, global_step, num_slices=256):
     device = x.device
     generator = torch.Generator(device=device)
     generator.manual_seed(int(global_step))
+
     A = torch.randn(x.size(1), num_slices, generator=generator, device=device)
     A = A / A.norm(p=2, dim=0, keepdim=True).clamp_min(1e-8)
 
     t = torch.linspace(-5, 5, 17, device=device)
     exp_f = torch.exp(-0.5 * t.square())
+
     x_t = (x @ A).unsqueeze(2) * t
     ecf = torch.exp(1j * x_t).mean(dim=0)
 
     if dist.is_available() and dist.is_initialized():
-        dist.all_reduce(ecf, op=dist.ReduceOp.SUM)
-        ecf /= dist.get_world_size()
         world_size = dist.get_world_size()
+        ecf = all_reduce(ecf, op=dist.ReduceOp.SUM) / world_size
     else:
         world_size = 1
 
     err = (ecf - exp_f).abs().square().mul(exp_f)
     n = x.size(0) * world_size
+
     return torch.trapz(err, t, dim=1) * n
 
 
@@ -227,5 +231,15 @@ def train_lejepa(model, dataloader, config=None):
     feature_dim = model.config.hidden_size
 
     module = LeJEPATrainer(model, feature_dim, len(dataloader), cfg)
-    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="auto", devices=1, precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
+    trainer = pl.Trainer(
+        max_epochs=cfg["epochs"],
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=cfg["devices"],
+        strategy="ddp" if cfg["devices"] > 1 else "auto",
+        precision="16-mixed" if torch.cuda.is_available() else "32-true",
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        log_every_n_steps=10,
+    )
     trainer.fit(module, train_dataloaders=dataloader)

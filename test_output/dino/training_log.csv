@@ -1,0 +1,2 @@
+epoch,train_loss,lr,teacher_momentum
+1,2.728205919265747,0.0002505,0.998
