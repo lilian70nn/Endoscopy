@@ -32,7 +32,7 @@ import lightning.pytorch as pl
 
 DINO_DEFAULTS = {
     "epochs": 5,
-    "out_dim": 8000,
+    "out_dim": 9600,
     "hidden_dim": 1600,
     "bottleneck_dim": 256,
     "local_crops_number": 6,
