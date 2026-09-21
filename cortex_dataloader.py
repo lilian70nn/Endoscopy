@@ -197,21 +197,13 @@ class GastroNetCortexDataset(IterableDataset):
             self.shard_bar.reset(total=len(shards))
             self.shard_bar.set_description("Shards")
 
-        with ThreadPoolExecutor(max_workers=1) as download_pool, ThreadPoolExecutor(max_workers=self.decode_workers) as decode_pool:
-            future = download_pool.submit(self.download_shard, cortex, shards[0])
-
-            for i, info in enumerate(shards):
-                path = future.result()
-
-                if i + 1 < len(shards):
-                    future = download_pool.submit(self.download_shard, cortex, shards[i + 1])
+        with ThreadPoolExecutor(max_workers=self.decode_workers) as decode_pool:
+            for info in shards:
+                path = self.download_shard(cortex, info)
 
                 try:
                     with zipfile.ZipFile(path, "r") as zf:
-                        names = [
-                            n for n in zf.namelist()
-                            if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.endswith("/")
-                        ]
+                        names = [n for n in zf.namelist() if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.endswith("/")]
 
                         if self.shuffle_images:
                             rng.shuffle(names)
