@@ -1,3 +1,5 @@
+你为什么不在我给你发的代码上改啊?难道是要改很多地方吗?
+
 import os, io, random, zipfile, subprocess, requests, time
 from pathlib import Path
 from tqdm.auto import tqdm
@@ -6,13 +8,11 @@ from torch.utils.data import IterableDataset, DataLoader
 from concurrent.futures import ThreadPoolExecutor
 import queue
 import threading
-import torch
 import torch.distributed as dist
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
 NUM_IMAGES = 4_820_653
-
 
 class CortexSession:
     def __init__(self, access_url):
@@ -124,7 +124,6 @@ class CortexSession:
         files.sort(key=lambda x: x["file_name"])
         return files
 
-
 class PrefetchDataLoader:
     def __init__(self, dataloader, prefetch_batches=2, devices=1):
         self.dataloader = dataloader
@@ -162,9 +161,6 @@ class PrefetchDataLoader:
                 raise item
             yield item
 
-
-
-
 class GastroNetCortexDataset(IterableDataset):
     def __init__(self, access_url, cache_dir="./cortex_cache", shuffle_shards=True, shuffle_images=True, seed=42, decode_workers=4, prefetch_size=1024):
         super().__init__()
@@ -192,15 +188,7 @@ class GastroNetCortexDataset(IterableDataset):
                 )
                 path.unlink()
 
-            try:
-                url = cortex.get_download_url(info["id"])
-            except Exception as e:
-                print(
-                    f"[Cortex] Failed to obtain URL for "
-                    f"{info['file_name']}: {e}",
-                    flush=True,
-                )
-                continue
+            url = cortex.get_download_url(info["id"])
 
             print(
                 f"[Cortex] Downloading {info['file_name']} "
@@ -246,12 +234,7 @@ class GastroNetCortexDataset(IterableDataset):
         if path.exists():
             path.unlink()
 
-        print(
-            f"[Cortex] Giving up on {info['file_name']} after 10 attempts",
-            flush=True,
-        )
-
-        return None
+        raise RuntimeError(f"Download failed: {info['file_name']}")
 
     @staticmethod
     def decode_image(item):
@@ -272,17 +255,6 @@ class GastroNetCortexDataset(IterableDataset):
 
         rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
         world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-
-        usable_shards = (len(shards) // world_size) * world_size
-
-        if usable_shards < len(shards) and rank == 0:
-            print(
-                f"[Cortex] Dropping final {len(shards) - usable_shards} shards "
-                f"to keep complete groups of {world_size}",
-                flush=True,
-            )
-
-        shards = shards[:usable_shards]
         shards = shards[rank::world_size]
 
         if not shards:
@@ -297,36 +269,6 @@ class GastroNetCortexDataset(IterableDataset):
         with ThreadPoolExecutor(max_workers=self.decode_workers) as decode_pool:
             for info in shards:
                 path = self.download_shard(cortex, info)
-
-                local_success = 1 if path is not None else 0
-
-                if dist.is_available() and dist.is_initialized():
-                    status = torch.tensor(
-                        local_success,
-                        device=f"cuda:{torch.cuda.current_device()}",
-                        dtype=torch.int32,
-                    )
-
-                    dist.all_reduce(status, op=dist.ReduceOp.MIN)
-                    group_success = status.item() == 1
-                else:
-                    group_success = local_success == 1
-
-                if not group_success:
-                    print(
-                        f"[Cortex] Rank {rank}: skipping current shard group "
-                        f"because at least one rank failed",
-                        flush=True,
-                    )
-
-                    if path is not None:
-                        try:
-                            path.unlink()
-                        except FileNotFoundError:
-                            pass
-
-                    self.shard_bar.update(1)
-                    continue
 
                 try:
                     with zipfile.ZipFile(path, "r") as zf:
@@ -369,7 +311,6 @@ class GastroNetCortexDataset(IterableDataset):
 
                 self.shard_bar.update(1)
 
-
 class CortexDataLoader(DataLoader):
     def __init__(self, dataset, batch_size, **kwargs):
         self._batch_size_for_len = batch_size
@@ -378,7 +319,6 @@ class CortexDataLoader(DataLoader):
     def __len__(self):
         world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
         return NUM_IMAGES // (self._batch_size_for_len * world_size)
-
 
 def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache", devices=8):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
