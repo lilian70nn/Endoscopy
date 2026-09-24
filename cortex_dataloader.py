@@ -145,29 +145,15 @@ class GastroNetCortexDataset(IterableDataset):
         path = self.cache_dir / info["file_name"]
         expected_size = int(info["size"])
 
-        if path.exists() and path.stat().st_size == expected_size:
-            try:
-                with zipfile.ZipFile(path, "r") as zf:
-                    if zf.testzip() is None:
-                        return path
-            except zipfile.BadZipFile:
-                pass
-
-            print(
-                f"[Cortex] Existing file is corrupt: {info['file_name']}",
-                flush=True,
-            )
-            path.unlink()
-
-        if path.exists():
-            print(
-                f"[Cortex] Removing incomplete {info['file_name']}: "
-                f"{path.stat().st_size} != {expected_size}",
-                flush=True,
-            )
-            path.unlink()
-
         for attempt in range(10):
+            if path.exists():
+                print(
+                    f"[Cortex] Removing previous/incomplete "
+                    f"{info['file_name']} ({path.stat().st_size} bytes)",
+                    flush=True,
+                )
+                path.unlink()
+
             url = cortex.get_download_url(info["id"])
 
             print(
@@ -188,24 +174,31 @@ class GastroNetCortexDataset(IterableDataset):
                 url,
             ])
 
+            actual_size = path.stat().st_size if path.exists() else 0
+
             if (
                 result.returncode == 0
                 and path.exists()
-                and path.stat().st_size == expected_size
+                and actual_size == expected_size
             ):
+                print(
+                    f"[Cortex] Download complete: {info['file_name']} "
+                    f"({actual_size} bytes)",
+                    flush=True,
+                )
                 return path
 
-            actual_size = path.stat().st_size if path.exists() else 0
-
             print(
-                f"[Cortex] Failed/incomplete {info['file_name']}: "
+                f"[Cortex] Download failed/incomplete: "
+                f"{info['file_name']}, "
                 f"curl={result.returncode}, "
-                f"size={actual_size}, expected={expected_size}",
+                f"size={actual_size}, "
+                f"expected={expected_size}",
                 flush=True,
             )
 
-            if path.exists():
-                path.unlink()
+        if path.exists():
+            path.unlink()
 
         raise RuntimeError(f"Download failed: {info['file_name']}")
 
