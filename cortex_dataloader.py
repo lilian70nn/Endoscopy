@@ -1,4 +1,4 @@
-import os, io, random, zipfile, subprocess, requests
+import os, io, random, zipfile, subprocess, requests, time
 from pathlib import Path
 from tqdm.auto import tqdm
 from PIL import Image
@@ -53,27 +53,64 @@ class CortexSession:
     def get_download_url(self, file_id):
         endpoint = f"{BASE_URL}/api/provided_file/{file_id}/download_url/"
 
-        for attempt in range(2):
-            r = self.session.post(
-                endpoint,
-                headers={
-                    "X-Csrftoken": self.csrf,
-                    "Origin": BASE_URL,
-                    "Referer": f"{BASE_URL}/dataset-provider/request/download/",
-                },
-                timeout=60,
-            )
+        max_attempts = 10
 
-            if r.status_code == 200:
-                return r.json()["url"]
+        for attempt in range(max_attempts):
+            try:
+                r = self.session.post(
+                    endpoint,
+                    headers={
+                        "X-Csrftoken": self.csrf,
+                        "Origin": BASE_URL,
+                        "Referer": f"{BASE_URL}/dataset-provider/request/download/",
+                    },
+                    timeout=60,
+                )
 
-            print(f"[Cortex] download_url HTTP {r.status_code}: {r.text[:300]}", flush=True)
+                if r.status_code == 200:
+                    return r.json()["url"]
 
-            if r.status_code == 403 and attempt == 0:
-                self.login()
-                continue
+                print(
+                    f"[Cortex] download_url HTTP {r.status_code} "
+                    f"(attempt {attempt + 1}/{max_attempts}): "
+                    f"{r.text[:300]}",
+                    flush=True,
+                )
 
-            r.raise_for_status()
+                # Session / CSRF may have expired.
+                if r.status_code == 403:
+                    print(
+                        "[Cortex] Session may have expired. Re-login...",
+                        flush=True,
+                    )
+                    self.login()
+
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ) as e:
+                print(
+                    f"[Cortex] download_url request failed "
+                    f"(attempt {attempt + 1}/{max_attempts}): "
+                    f"{type(e).__name__}: {e}",
+                    flush=True,
+                )
+
+            # Do not immediately hammer Cortex again.
+            if attempt < max_attempts - 1:
+                wait_seconds = min(5 * (attempt + 1), 30)
+
+                print(
+                    f"[Cortex] Waiting {wait_seconds}s before retry...",
+                    flush=True,
+                )
+
+                time.sleep(wait_seconds)
+
+        raise RuntimeError(
+            f"Failed to obtain download URL for file_id={file_id} "
+            f"after {max_attempts} attempts"
+        )
 
     def get_files(self):
         r = self.session.get(
