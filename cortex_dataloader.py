@@ -146,24 +146,66 @@ class GastroNetCortexDataset(IterableDataset):
         expected_size = int(info["size"])
 
         if path.exists() and path.stat().st_size == expected_size:
-            return path
+            try:
+                with zipfile.ZipFile(path, "r") as zf:
+                    if zf.testzip() is None:
+                        return path
+            except zipfile.BadZipFile:
+                pass
+
+            print(
+                f"[Cortex] Existing file is corrupt: {info['file_name']}",
+                flush=True,
+            )
+            path.unlink()
+
+        if path.exists():
+            print(
+                f"[Cortex] Removing incomplete {info['file_name']}: "
+                f"{path.stat().st_size} != {expected_size}",
+                flush=True,
+            )
+            path.unlink()
 
         for attempt in range(10):
             url = cortex.get_download_url(info["id"])
 
-            subprocess.run([
+            print(
+                f"[Cortex] Downloading {info['file_name']} "
+                f"(attempt {attempt + 1}/10)",
+                flush=True,
+            )
+
+            result = subprocess.run([
                 "curl",
                 "-L",
                 "--fail",
                 "--show-error",
                 "--connect-timeout", "30",
-                "-C", "-",
+                "--retry", "3",
+                "--retry-delay", "5",
                 "-o", str(path),
                 url,
             ])
 
-            if path.exists() and path.stat().st_size == expected_size:
+            if (
+                result.returncode == 0
+                and path.exists()
+                and path.stat().st_size == expected_size
+            ):
                 return path
+
+            actual_size = path.stat().st_size if path.exists() else 0
+
+            print(
+                f"[Cortex] Failed/incomplete {info['file_name']}: "
+                f"curl={result.returncode}, "
+                f"size={actual_size}, expected={expected_size}",
+                flush=True,
+            )
+
+            if path.exists():
+                path.unlink()
 
         raise RuntimeError(f"Download failed: {info['file_name']}")
 
@@ -253,7 +295,7 @@ class CortexDataLoader(DataLoader):
         return NUM_IMAGES // (self._batch_size_for_len * world_size)
 
 
-def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache", devices=4):
+def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache", devices=8):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
