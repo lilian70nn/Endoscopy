@@ -6,6 +6,7 @@ from torch.utils.data import IterableDataset, DataLoader
 from concurrent.futures import ThreadPoolExecutor
 import queue
 import threading
+import torch
 import torch.distributed as dist
 
 BASE_URL = "https://cortex.thetavision.nl"
@@ -191,7 +192,15 @@ class GastroNetCortexDataset(IterableDataset):
                 )
                 path.unlink()
 
-            url = cortex.get_download_url(info["id"])
+            try:
+                url = cortex.get_download_url(info["id"])
+            except Exception as e:
+                print(
+                    f"[Cortex] Failed to obtain URL for "
+                    f"{info['file_name']}: {e}",
+                    flush=True,
+                )
+                continue
 
             print(
                 f"[Cortex] Downloading {info['file_name']} "
@@ -237,7 +246,12 @@ class GastroNetCortexDataset(IterableDataset):
         if path.exists():
             path.unlink()
 
-        raise RuntimeError(f"Download failed: {info['file_name']}")
+        print(
+            f"[Cortex] Giving up on {info['file_name']} after 10 attempts",
+            flush=True,
+        )
+
+        return None
 
     @staticmethod
     def decode_image(item):
@@ -258,6 +272,17 @@ class GastroNetCortexDataset(IterableDataset):
 
         rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
         world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+
+        usable_shards = (len(shards) // world_size) * world_size
+
+        if usable_shards < len(shards) and rank == 0:
+            print(
+                f"[Cortex] Dropping final {len(shards) - usable_shards} shards "
+                f"to keep complete groups of {world_size}",
+                flush=True,
+            )
+
+        shards = shards[:usable_shards]
         shards = shards[rank::world_size]
 
         if not shards:
@@ -272,6 +297,36 @@ class GastroNetCortexDataset(IterableDataset):
         with ThreadPoolExecutor(max_workers=self.decode_workers) as decode_pool:
             for info in shards:
                 path = self.download_shard(cortex, info)
+
+                local_success = 1 if path is not None else 0
+
+                if dist.is_available() and dist.is_initialized():
+                    status = torch.tensor(
+                        local_success,
+                        device=f"cuda:{torch.cuda.current_device()}",
+                        dtype=torch.int32,
+                    )
+
+                    dist.all_reduce(status, op=dist.ReduceOp.MIN)
+                    group_success = status.item() == 1
+                else:
+                    group_success = local_success == 1
+
+                if not group_success:
+                    print(
+                        f"[Cortex] Rank {rank}: skipping current shard group "
+                        f"because at least one rank failed",
+                        flush=True,
+                    )
+
+                    if path is not None:
+                        try:
+                            path.unlink()
+                        except FileNotFoundError:
+                            pass
+
+                    self.shard_bar.update(1)
+                    continue
 
                 try:
                     with zipfile.ZipFile(path, "r") as zf:
