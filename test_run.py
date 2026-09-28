@@ -12,7 +12,6 @@ def main():
     # Cortex/DDP/shard logic remains unchanged.
     dataloader = initialize_dataloader(
         batch_size=50,
-        devices=2,
     )
 
     model = initialize_siglip2(initialization="siglip2")
