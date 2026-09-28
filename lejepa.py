@@ -13,13 +13,14 @@ import csv
 from pathlib import Path
 from tqdm.auto import tqdm
 
-import numpy as np
 from PIL import Image
 import torch
 import torch.distributed as dist
 import lightning.pytorch as pl
 from torchvision import transforms
 from torch.distributed.nn.functional import all_reduce
+
+from .utils import cosine_value, get_epoch_progress, get_lr
 
 
 # Default LeJEPA settings
@@ -111,31 +112,20 @@ def sigreg(x, global_step, num_slices=256):
     return torch.trapz(err, t, dim=1) * n
 
 
-# Official-style LR schedule
-
-def cosine_schedule(base_value, final_value, total_steps, warmup_steps=0, start_warmup_value=0):
-    warmup = np.linspace(start_warmup_value, base_value, warmup_steps) if warmup_steps > 0 else np.array([])
-    remaining = total_steps - warmup_steps
-    iters = np.arange(remaining)
-    schedule = final_value + 0.5 * (base_value - final_value) * (1 + np.cos(np.pi * iters / max(1, remaining)))
-    return np.concatenate((warmup, schedule))
-
 
 # Lightning LeJEPA trainer
 
 class LeJEPATrainer(pl.LightningModule):
-    def __init__(self, backbone, feature_dim, steps_per_epoch, cfg):
+    def __init__(self, backbone, feature_dim, cfg):
         super().__init__()
         self.automatic_optimization = False
         self.backbone = backbone
         self.feature_dim = feature_dim
         self.cfg = cfg
-        self.steps_per_epoch = steps_per_epoch
         self.augmentation = DataAugmentationLeJEPA(cfg["global_crops_scale"], cfg["local_crops_scale"], cfg["num_local_crops"])
-        total_steps = cfg["epochs"] * steps_per_epoch
-        warmup_steps = cfg["warmup_epochs"] * steps_per_epoch
-        self.lr_schedule = cosine_schedule(cfg["lr"], cfg["min_lr"], total_steps, warmup_steps)
         self.epoch_bar = None
+        self.previous_steps = None
+        self.current_epoch_steps = 0
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.backbone.parameters(), lr=self.cfg["lr"], weight_decay=self.cfg["weight_decay"])
@@ -149,9 +139,18 @@ class LeJEPATrainer(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         optimizer = self.optimizers()
-        step = self.current_epoch * self.steps_per_epoch + batch_idx
-        step = min(step, len(self.lr_schedule) - 1)
-        for group in optimizer.param_groups: group["lr"] = float(self.lr_schedule[step])
+        epoch_progress = get_epoch_progress(
+            self.current_epoch,
+            batch_idx,
+            self.previous_steps,
+        )
+
+        lr = get_lr(self.cfg, epoch_progress)
+
+        for group in optimizer.param_groups:
+            group["lr"] = lr
+
+        self.current_epoch_steps = batch_idx + 1
 
         views = self.augment_batch(batch)
         embeddings = [run_backbone(self.backbone, view) for view in views]
@@ -159,26 +158,30 @@ class LeJEPATrainer(pl.LightningModule):
         global_embeddings = torch.stack(embeddings[:2], dim=0)
         centers = global_embeddings.mean(dim=0)
         pred_loss = torch.stack([(centers - emb).square().mean() for emb in embeddings]).mean()
-        sigreg_loss = torch.stack([sigreg(emb, step, self.cfg["num_slices"]).mean() for emb in embeddings]).mean()
+        sigreg_loss = torch.stack([sigreg(emb, self.global_step, self.cfg["num_slices"]).mean() for emb in embeddings]).mean()
         loss = (1.0 - self.cfg["lambda"]) * pred_loss + self.cfg["lambda"] * sigreg_loss
 
         if self.epoch_bar is not None:
-            self.epoch_bar.set_postfix(loss=f"{loss.detach().item():.4f}", pred=f"{pred_loss.detach().item():.4f}", sigreg=f"{sigreg_loss.detach().item():.4f}", lr=f"{float(self.lr_schedule[step]):.2e}")
+            self.epoch_bar.set_postfix(loss=f"{loss.detach().item():.4f}", pred=f"{pred_loss.detach().item():.4f}", sigreg=f"{sigreg_loss.detach().item():.4f}", lr=f"{lr:.2e}")
 
         accum_steps = self.cfg["accumulate_grad_batches"]
         if batch_idx % accum_steps == 0: optimizer.zero_grad()
         self.manual_backward(loss / accum_steps)
-        should_step = (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == self.steps_per_epoch
+        should_step = (batch_idx + 1) % accum_steps == 0
         if should_step: optimizer.step()
 
         batch_size = len(batch["image"]) if isinstance(batch, dict) else len(batch[0]) if isinstance(batch, tuple) else len(batch)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
         self.log("pred_loss", pred_loss, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
         self.log("sigreg_loss", sigreg_loss, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
-        self.log("lr", float(self.lr_schedule[step]), prog_bar=False)
+        self.log("lr", lr, prog_bar=False)
         return loss
 
     def on_train_epoch_end(self):
+
+        self.previous_steps = self.current_epoch_steps
+        self.current_epoch_steps = 0
+
         if self.global_rank != 0: return
 
         if self.epoch_bar is not None: self.epoch_bar.update(1)
@@ -207,7 +210,7 @@ class LeJEPATrainer(pl.LightningModule):
                 float(train_loss.detach().cpu()) if train_loss is not None else "",
                 float(pred_loss.detach().cpu()) if pred_loss is not None else "",
                 float(sigreg_loss.detach().cpu()) if sigreg_loss is not None else "",
-                float(self.lr_schedule[min(epoch * self.steps_per_epoch - 1, len(self.lr_schedule) - 1)])
+                float(self.trainer.optimizers[0].param_groups[0]["lr"])
             ])
 
     def on_train_start(self):
@@ -230,7 +233,7 @@ def train_lejepa(model, dataloader, config=None):
 
     feature_dim = model.config.hidden_size
 
-    module = LeJEPATrainer(model, feature_dim, len(dataloader), cfg)
+    module = LeJEPATrainer(model, feature_dim, cfg)
     trainer = pl.Trainer(
         max_epochs=cfg["epochs"],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",

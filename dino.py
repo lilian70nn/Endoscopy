@@ -26,6 +26,8 @@ import torch.distributed as dist
 from torchvision import transforms
 import lightning.pytorch as pl
 
+from .utils import cosine_value, get_epoch_progress, get_lr
+
 
 
 # Default DINOv1 settings: based on the Meta repo provided
@@ -212,12 +214,6 @@ class DINOLoss(nn.Module):
 
 # Official-style schedules / optimizer groups
 
-def cosine_schedule(base_value, final_value, total_steps, warmup_steps=0, start_warmup_value=0):
-    warmup = np.linspace(start_warmup_value, base_value, warmup_steps) if warmup_steps > 0 else np.array([])
-    remaining = total_steps - warmup_steps
-    iters = np.arange(remaining)
-    schedule = final_value + 0.5 * (base_value - final_value) * (1 + np.cos(np.pi * iters / max(1, remaining)))
-    return np.concatenate((warmup, schedule))
 
 
 def get_params_groups(model):
@@ -246,23 +242,21 @@ def cancel_gradients_last_layer(epoch, model, freeze_last_layer):
 # Lightning DINO trainer
 
 class DINOTrainer(pl.LightningModule):
-    def __init__(self, backbone, feature_dim, steps_per_epoch, cfg):
+    def __init__(self, backbone, feature_dim, cfg):
         super().__init__()
         self.automatic_optimization = False
         self.cfg = cfg
-        self.steps_per_epoch = steps_per_epoch
         self.student = DINOModel(copy.deepcopy(backbone), feature_dim, cfg, teacher=False)
         self.teacher = DINOModel(copy.deepcopy(backbone), feature_dim, cfg, teacher=True)
         self.teacher.load_state_dict(self.student.state_dict())
         for p in self.teacher.parameters(): p.requires_grad = False
         self.dino_loss = DINOLoss(cfg)
         self.augmentation = DataAugmentationDINO(cfg["global_crops_scale"], cfg["local_crops_scale"], cfg["local_crops_number"])
-        total_steps = cfg["epochs"] * steps_per_epoch
-        warmup_steps = cfg["warmup_epochs"] * steps_per_epoch
-        self.lr_schedule = cosine_schedule(cfg["lr"], cfg["min_lr"], total_steps, warmup_steps)
-        self.wd_schedule = cosine_schedule(cfg["weight_decay"], cfg["weight_decay_end"], total_steps)
-        self.momentum_schedule = cosine_schedule(cfg["momentum_teacher"], 1.0, total_steps)
         self.epoch_bar = None
+        self.previous_steps = None
+        self.current_epoch_steps = 0
+        self.last_momentum = cfg["momentum_teacher"]
+
 
     def configure_optimizers(self):
         return torch.optim.AdamW(get_params_groups(self.student), lr=self.cfg["lr"])
@@ -276,10 +270,36 @@ class DINOTrainer(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         optimizer = self.optimizers()
-        step = self.current_epoch * self.steps_per_epoch + batch_idx
-        step = min(step, len(self.lr_schedule) - 1)
-        for group in optimizer.param_groups: group["lr"] = float(self.lr_schedule[step])
-        optimizer.param_groups[0]["weight_decay"] = float(self.wd_schedule[step])
+
+        epoch_progress = get_epoch_progress(
+            self.current_epoch,
+            batch_idx,
+            self.previous_steps,
+        )
+
+        lr = get_lr(self.cfg, epoch_progress)
+        progress = epoch_progress / self.cfg["epochs"]
+
+        wd = cosine_value(
+            self.cfg["weight_decay"],
+            self.cfg["weight_decay_end"],
+            progress,
+        )
+
+        momentum = cosine_value(
+            self.cfg["momentum_teacher"],
+            1.0,
+            progress,
+        )
+
+        self.last_momentum = momentum
+
+        for group in optimizer.param_groups:
+            group["lr"] = lr
+
+        optimizer.param_groups[0]["weight_decay"] = wd
+
+        self.current_epoch_steps = batch_idx + 1
         images = self.augment_batch(batch)
         with torch.no_grad(): teacher_output = self.teacher(images[:2])
         student_output = self.student(images)
@@ -287,30 +307,34 @@ class DINOTrainer(pl.LightningModule):
         if self.epoch_bar is not None:
             self.epoch_bar.set_postfix(
                 loss=f"{loss.detach().item():.4f}",
-                lr=f"{float(self.lr_schedule[step]):.2e}",
-                m=f"{float(self.momentum_schedule[step]):.4f}"
+                lr=f"{lr:.2e}",
+                m=f"{momentum:.4f}"
             )
         accum_steps = self.cfg["accumulate_grad_batches"]
         if batch_idx % accum_steps == 0:
             optimizer.zero_grad()
         self.manual_backward(loss / accum_steps)
-        should_step = (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == self.steps_per_epoch
+        should_step = (batch_idx + 1) % accum_steps == 0
         if should_step:
             if self.cfg["clip_grad"] > 0: 
                 clip_gradients(self.student, self.cfg["clip_grad"])
             cancel_gradients_last_layer(self.current_epoch, self.student, self.cfg["freeze_last_layer"])
             optimizer.step()
             with torch.no_grad():
-                m = float(self.momentum_schedule[step])
+                m = momentum
                 for student_param, teacher_param in zip(self.student.parameters(), self.teacher.parameters()):
                     teacher_param.data.mul_(m).add_(student_param.detach().data, alpha=1.0 - m)
         batch_size = len(batch)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
-        self.log("lr", float(self.lr_schedule[step]), prog_bar=False)
-        self.log("teacher_momentum", float(self.momentum_schedule[step]), prog_bar=False)
+        self.log("lr", lr, prog_bar=False)
+        self.log("teacher_momentum", momentum, prog_bar=False)
         return loss
 
     def on_train_epoch_end(self):
+
+        self.previous_steps = self.current_epoch_steps
+        self.current_epoch_steps = 0
+
         if self.global_rank != 0:
             return
 
@@ -337,8 +361,8 @@ class DINOTrainer(pl.LightningModule):
             writer.writerow([
                 epoch,
                 float(train_loss.detach().cpu()) if train_loss is not None else "",
-                float(self.lr_schedule[min(epoch * self.steps_per_epoch - 1, len(self.lr_schedule) - 1)]),
-                float(self.momentum_schedule[min(epoch * self.steps_per_epoch - 1, len(self.momentum_schedule) - 1)])
+                float(self.trainer.optimizers[0].param_groups[0]["lr"]),
+                float(self.last_momentum),
             ])
 
     def on_train_start(self):
@@ -370,6 +394,6 @@ def train_dino(model, dataloader, config=None):
 
     feature_dim = model.config.hidden_size
 
-    module = DINOTrainer(model, feature_dim, len(dataloader), cfg)
+    module = DINOTrainer(model, feature_dim, cfg)
     trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="gpu" if torch.cuda.is_available() else "cpu", devices=cfg.get("devices", 1), strategy="ddp" if cfg.get("devices", 1) > 1 else "auto", precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
     trainer.fit(module, train_dataloaders=dataloader)

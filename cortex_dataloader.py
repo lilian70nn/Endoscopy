@@ -12,7 +12,6 @@ import torch
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
-NUM_IMAGES = 4_820_653
 
 
 class CortexSession:
@@ -90,13 +89,9 @@ class CortexSession:
 
 
 class PrefetchDataLoader:
-    def __init__(self, dataloader, prefetch_batches=2, devices=1):
+    def __init__(self, dataloader, prefetch_batches=2):
         self.dataloader = dataloader
         self.prefetch_batches = prefetch_batches
-        self.devices = devices
-
-    def __len__(self):
-        return NUM_IMAGES // (self.dataloader.batch_size * self.devices)
 
     @property
     def batch_size(self):
@@ -141,7 +136,6 @@ class PrefetchDataLoader:
                 break
 
             yield item
-
 
 
 
@@ -311,17 +305,9 @@ class GastroNetCortexDataset(IterableDataset):
                 self.shard_bar.update(1)
 
 
-class CortexDataLoader(DataLoader):
-    def __init__(self, dataset, batch_size, **kwargs):
-        self._batch_size_for_len = batch_size
-        super().__init__(dataset, batch_size=batch_size, **kwargs)
-
-    def __len__(self):
-        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-        return NUM_IMAGES // (self._batch_size_for_len * world_size)
 
 
-def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache", devices=8):
+def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
     if not access_url:
         raise RuntimeError("CORTEX_ACCESS_URL is not set")
@@ -335,7 +321,7 @@ def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache", devices=8)
         prefetch_size=1024,
     )
 
-    dataloader = CortexDataLoader(
+    dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         num_workers=0,
@@ -343,4 +329,7 @@ def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache", devices=8)
         collate_fn=lambda batch: batch,
     )
 
-    return PrefetchDataLoader(dataloader, prefetch_batches=2, devices=devices)
+    return PrefetchDataLoader(
+        dataloader,
+        prefetch_batches=2,
+    )

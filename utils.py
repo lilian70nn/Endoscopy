@@ -7,8 +7,7 @@ Shared utilities for:
 
 
 import torch
-# from datasets import load_dataset
-# from torch.utils.data import DataLoader
+import math
 
 from transformers import AutoConfig, AutoModel
 from torchvision.models import vit_b_16, ViT_B_16_Weights
@@ -107,6 +106,34 @@ def initialize_siglip2(initialization="siglip2"):
 #     )
 
 #     return dataloader
+
+def cosine_value(base_value, final_value, progress):
+    progress = min(max(progress, 0.0), 1.0)
+    return final_value + 0.5 * (base_value - final_value) * (
+        1.0 + math.cos(math.pi * progress)
+    )
+
+
+def get_epoch_progress(current_epoch, batch_idx, previous_steps):
+    if previous_steps is None or previous_steps <= 0:
+        return float(current_epoch)
+
+    return current_epoch + min(
+        (batch_idx + 1) / previous_steps,
+        1.0,
+    )
+
+
+def get_lr(cfg, epoch_progress):
+    if cfg["warmup_epochs"] > 0 and epoch_progress < cfg["warmup_epochs"]:
+        return cfg["lr"] * epoch_progress / cfg["warmup_epochs"]
+
+    progress = (
+        epoch_progress - cfg["warmup_epochs"]
+    ) / max(1, cfg["epochs"] - cfg["warmup_epochs"])
+
+    return cosine_value(cfg["lr"], cfg["min_lr"], progress)
+
 
 def load_trained_model(initialization, checkpoint_path):
     model = initialize_siglip2(initialization=initialization)
