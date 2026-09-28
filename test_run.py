@@ -21,7 +21,7 @@ def main():
         dataloader,
         config={
             "devices": 2,
-            "epochs": 1,
+            "epochs": 2,
             "output_dir": "./checkpoints/ddp_smoke_test",
         },
     )
