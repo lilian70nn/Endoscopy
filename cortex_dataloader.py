@@ -222,7 +222,8 @@ class GastroNetCortexDataset(IterableDataset):
             if path.exists():
                 path.unlink()
 
-            time.sleep(10)
+            wait_seconds = min(10 * attempt, 120)
+            time.sleep(wait_seconds)
 
     @staticmethod
     def decode_image(item):
