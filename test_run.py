@@ -11,7 +11,7 @@ def main():
     # Small batch because V100 only has ~16 GB VRAM per GPU.
     # Cortex/DDP/shard logic remains unchanged.
     dataloader = initialize_dataloader(
-        batch_size=2,
+        batch_size=50,
         devices=2,
     )
 
