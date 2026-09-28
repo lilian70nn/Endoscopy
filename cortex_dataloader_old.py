@@ -7,8 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 import queue
 import threading
 import torch.distributed as dist
-import time
-import torch
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
@@ -120,26 +118,10 @@ class PrefetchDataLoader:
 
         while True:
             item = q.get()
-
+            if item is sentinel:
+                break
             if isinstance(item, Exception):
                 raise item
-
-            has_batch = 0 if item is sentinel else 1
-
-            if dist.is_available() and dist.is_initialized():
-                flag = torch.tensor(
-                    has_batch,
-                    device=torch.cuda.current_device(),
-                    dtype=torch.int32,
-                )
-                dist.all_reduce(flag, op=dist.ReduceOp.MIN)
-                all_have_batch = flag.item() == 1
-            else:
-                all_have_batch = has_batch == 1
-
-            if not all_have_batch:
-                break
-
             yield item
 
 
@@ -162,11 +144,8 @@ class GastroNetCortexDataset(IterableDataset):
     def download_shard(self, cortex, info):
         path = self.cache_dir / info["file_name"]
         expected_size = int(info["size"])
-        attempt = 0
 
-        while True:
-            attempt += 1
-
+        for attempt in range(10):
             if path.exists():
                 print(
                     f"[Cortex] Removing previous/incomplete "
@@ -175,60 +154,53 @@ class GastroNetCortexDataset(IterableDataset):
                 )
                 path.unlink()
 
-            try:
-                url = cortex.get_download_url(info["id"])
+            url = cortex.get_download_url(info["id"])
 
+            print(
+                f"[Cortex] Downloading {info['file_name']} "
+                f"(attempt {attempt + 1}/10)",
+                flush=True,
+            )
+
+            result = subprocess.run([
+                "curl",
+                "-L",
+                "--fail",
+                "--show-error",
+                "--connect-timeout", "30",
+                "--retry", "3",
+                "--retry-delay", "5",
+                "-o", str(path),
+                url,
+            ])
+
+            actual_size = path.stat().st_size if path.exists() else 0
+
+            if (
+                result.returncode == 0
+                and path.exists()
+                and actual_size == expected_size
+            ):
                 print(
-                    f"[Cortex] Downloading {info['file_name']} "
-                    f"(attempt {attempt})",
+                    f"[Cortex] Download complete: {info['file_name']} "
+                    f"({actual_size} bytes)",
                     flush=True,
                 )
+                return path
 
-                result = subprocess.run([
-                    "curl",
-                    "-L",
-                    "--fail",
-                    "--show-error",
-                    "--connect-timeout", "30",
-                    "--retry", "3",
-                    "--retry-delay", "5",
-                    "-o", str(path),
-                    url,
-                ])
+            print(
+                f"[Cortex] Download failed/incomplete: "
+                f"{info['file_name']}, "
+                f"curl={result.returncode}, "
+                f"size={actual_size}, "
+                f"expected={expected_size}",
+                flush=True,
+            )
 
-                actual_size = path.stat().st_size if path.exists() else 0
+        if path.exists():
+            path.unlink()
 
-                if (
-                    result.returncode == 0
-                    and path.exists()
-                    and actual_size == expected_size
-                ):
-                    print(
-                        f"[Cortex] Download complete: {info['file_name']} "
-                        f"({actual_size} bytes)",
-                        flush=True,
-                    )
-                    return path
-
-                print(
-                    f"[Cortex] Download failed/incomplete: "
-                    f"{info['file_name']}, "
-                    f"curl={result.returncode}, "
-                    f"size={actual_size}, "
-                    f"expected={expected_size}",
-                    flush=True,
-                )
-
-            except Exception as e:
-                print(
-                    f"[Cortex] Failed to get/download {info['file_name']}: {e}",
-                    flush=True,
-                )
-
-            if path.exists():
-                path.unlink()
-
-            time.sleep(10)
+        raise RuntimeError(f"Download failed: {info['file_name']}")
 
     @staticmethod
     def decode_image(item):
@@ -249,11 +221,6 @@ class GastroNetCortexDataset(IterableDataset):
 
         rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
         world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-
-        # Drop the final incomplete group so every rank gets the same number of shards.
-        usable_shards = (len(shards) // world_size) * world_size
-        shards = shards[:usable_shards]
-
         shards = shards[rank::world_size]
 
         if not shards:
