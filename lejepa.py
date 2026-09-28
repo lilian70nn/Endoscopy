@@ -20,7 +20,7 @@ import lightning.pytorch as pl
 from torchvision import transforms
 from torch.distributed.nn.functional import all_reduce
 
-from .utils import cosine_value, get_epoch_progress, get_lr
+from utils import cosine_value, get_epoch_progress, get_lr
 
 
 # Default LeJEPA settings

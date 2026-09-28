@@ -26,7 +26,7 @@ import torch.distributed as dist
 from torchvision import transforms
 import lightning.pytorch as pl
 
-from .utils import cosine_value, get_epoch_progress, get_lr
+from utils import cosine_value, get_epoch_progress, get_lr
 
 
 
