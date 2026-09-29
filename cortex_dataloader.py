@@ -252,7 +252,7 @@ class GastroNetCortexDataset(IterableDataset):
         shards = shards[rank::world_size]
 
         # TEMP: only for testing end-of-epoch behavior
-        shards = shards[:5]
+        # shards = shards[:5]
 
         if not shards:
             raise RuntimeError(f"No Cortex shards found for rank {rank}")
