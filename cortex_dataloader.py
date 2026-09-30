@@ -9,9 +9,29 @@ import threading
 import torch.distributed as dist
 import time
 import torch
+import shutil
+
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
+
+def is_valid_archive(path):
+    suffix = path.suffix.lower()
+
+    if suffix == ".zip":
+        return zipfile.is_zipfile(path)
+
+    if suffix == ".7z":
+        result = subprocess.run(
+            ["7z", "t", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return result.returncode == 0
+
+    return False
+
+
 
 
 class CortexSession:
@@ -196,7 +216,7 @@ class GastroNetCortexDataset(IterableDataset):
                     result.returncode == 0
                     and path.exists()
                     and actual_size == expected_size
-                    and zipfile.is_zipfile(path)
+                    and is_valid_archive(path)
                 ):
                     print(
                         f"[Cortex] Download complete: {info['file_name']} "
@@ -235,6 +255,83 @@ class GastroNetCortexDataset(IterableDataset):
         except Exception as e:
             return name, None, e
 
+
+    def iter_7z_images(self, path, rng, decode_pool):
+        extract_dir = self.cache_dir / f"{path.stem}_extracted"
+
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            result = subprocess.run([
+                "7z",
+                "x",
+                "-y",
+                f"-o{extract_dir}",
+                str(path),
+            ])
+
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to extract {path.name}")
+
+            image_paths = [
+                p for p in extract_dir.rglob("*")
+                if p.is_file()
+                and p.suffix.lower() in (".png", ".jpg", ".jpeg")
+            ]
+
+            if self.shuffle_images:
+                rng.shuffle(image_paths)
+
+            if self.image_bar is None:
+                self.image_bar = tqdm(
+                    total=len(image_paths),
+                    desc=path.name,
+                    leave=True,
+                )
+            else:
+                self.image_bar.reset(total=len(image_paths))
+                self.image_bar.set_description(path.name)
+
+            for start in range(0, len(image_paths), self.prefetch_size):
+                chunk_paths = image_paths[start:start + self.prefetch_size]
+
+                items = []
+
+                for image_path in chunk_paths:
+                    try:
+                        items.append(
+                            (str(image_path), image_path.read_bytes())
+                        )
+                    except Exception as e:
+                        self.image_bar.update(1)
+                        print(
+                            f"[Cortex] Failed to read {image_path} "
+                            f"from {path.name}: {e}",
+                            flush=True,
+                        )
+
+                for name, image, error in decode_pool.map(
+                    self.decode_image,
+                    items,
+                ):
+                    self.image_bar.update(1)
+
+                    if error is not None:
+                        print(
+                            f"[Cortex] Failed to decode {name} "
+                            f"from {path.name}: {error}",
+                            flush=True,
+                        )
+                        continue
+
+                    yield image
+
+        finally:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+
     def __iter__(self):
         cortex = CortexSession(self.access_url)
         shards = cortex.get_files()
@@ -269,37 +366,71 @@ class GastroNetCortexDataset(IterableDataset):
                 path = self.download_shard(cortex, info)
 
                 try:
-                    with zipfile.ZipFile(path, "r") as zf:
-                        names = [n for n in zf.namelist() if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.endswith("/")]
+                    suffix = path.suffix.lower()
 
-                        if self.shuffle_images:
-                            rng.shuffle(names)
+                    if suffix == ".zip":
+                        with zipfile.ZipFile(path, "r") as zf:
+                            names = [
+                                n for n in zf.namelist()
+                                if n.lower().endswith((".png", ".jpg", ".jpeg"))
+                                and not n.endswith("/")
+                            ]
 
-                        if self.image_bar is None:
-                            self.image_bar = tqdm(total=len(names), desc=info["file_name"], leave=True)
-                        else:
-                            self.image_bar.reset(total=len(names))
-                            self.image_bar.set_description(info["file_name"])
+                            if self.shuffle_images:
+                                rng.shuffle(names)
 
-                        for start in range(0, len(names), self.prefetch_size):
-                            chunk_names = names[start:start + self.prefetch_size]
-                            items = []
+                            if self.image_bar is None:
+                                self.image_bar = tqdm(
+                                    total=len(names),
+                                    desc=info["file_name"],
+                                    leave=True,
+                                )
+                            else:
+                                self.image_bar.reset(total=len(names))
+                                self.image_bar.set_description(info["file_name"])
 
-                            for name in chunk_names:
-                                try:
-                                    items.append((name, zf.read(name)))
-                                except Exception as e:
+                            for start in range(0, len(names), self.prefetch_size):
+                                chunk_names = names[start:start + self.prefetch_size]
+                                items = []
+
+                                for name in chunk_names:
+                                    try:
+                                        items.append((name, zf.read(name)))
+                                    except Exception as e:
+                                        self.image_bar.update(1)
+                                        print(
+                                            f"[Cortex] Failed to read {name} "
+                                            f"from {info['file_name']}: {e}",
+                                            flush=True,
+                                        )
+
+                                for name, image, error in decode_pool.map(
+                                    self.decode_image,
+                                    items,
+                                ):
                                     self.image_bar.update(1)
-                                    print(f"[Cortex] Failed to read {name} from {info['file_name']}: {e}", flush=True)
 
-                            for name, image, error in decode_pool.map(self.decode_image, items):
-                                self.image_bar.update(1)
+                                    if error is not None:
+                                        print(
+                                            f"[Cortex] Failed to decode {name} "
+                                            f"from {info['file_name']}: {error}",
+                                            flush=True,
+                                        )
+                                        continue
 
-                                if error is not None:
-                                    print(f"[Cortex] Failed to decode {name} from {info['file_name']}: {error}", flush=True)
-                                    continue
+                                    yield image
 
-                                yield image
+                    elif suffix == ".7z":
+                        yield from self.iter_7z_images(
+                            path,
+                            rng,
+                            decode_pool,
+                        )
+
+                    else:
+                        raise RuntimeError(
+                            f"Unsupported archive format: {path.name}"
+                        )
 
                 finally:
                     try:
