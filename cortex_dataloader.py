@@ -196,6 +196,7 @@ class GastroNetCortexDataset(IterableDataset):
                     result.returncode == 0
                     and path.exists()
                     and actual_size == expected_size
+                    and zipfile.is_zipfile(path)
                 ):
                     print(
                         f"[Cortex] Download complete: {info['file_name']} "
