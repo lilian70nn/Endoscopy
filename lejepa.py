@@ -22,6 +22,9 @@ from torch.distributed.nn.functional import all_reduce
 
 from utils import cosine_value, get_epoch_progress, get_lr
 
+from datetime import timedelta
+from lightning.pytorch.strategies import DDPStrategy
+
 
 # Default LeJEPA settings
 
@@ -238,7 +241,7 @@ def train_lejepa(model, dataloader, config=None):
         max_epochs=cfg["epochs"],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=cfg["devices"],
-        strategy="ddp" if cfg["devices"] > 1 else "auto",
+        strategy=DDPStrategy(timeout=timedelta(hours=6)) if cfg["devices"] > 1 else "auto",
         precision="16-mixed" if torch.cuda.is_available() else "32-true",
         logger=False,
         enable_checkpointing=False,

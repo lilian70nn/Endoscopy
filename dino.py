@@ -25,6 +25,8 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torchvision import transforms
 import lightning.pytorch as pl
+from datetime import timedelta
+from lightning.pytorch.strategies import DDPStrategy
 
 from utils import cosine_value, get_epoch_progress, get_lr
 
@@ -395,5 +397,5 @@ def train_dino(model, dataloader, config=None):
     feature_dim = model.config.hidden_size
 
     module = DINOTrainer(model, feature_dim, cfg)
-    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="gpu" if torch.cuda.is_available() else "cpu", devices=cfg.get("devices", 1), strategy="ddp" if cfg.get("devices", 1) > 1 else "auto", precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
+    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="gpu" if torch.cuda.is_available() else "cpu", devices=cfg.get("devices", 1), strategy=DDPStrategy(timeout=timedelta(hours=6)) if cfg.get("devices", 1) > 1 else "auto", precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
     trainer.fit(module, train_dataloaders=dataloader)
