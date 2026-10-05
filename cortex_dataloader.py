@@ -177,68 +177,56 @@ class GastroNetCortexDataset(IterableDataset):
         path = self.cache_dir / info["file_name"]
         expected_size = int(info["size"])
         attempt = 0
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
 
         while True:
             attempt += 1
 
             if path.exists():
-                print(
-                    f"[Cortex] Removing previous/incomplete "
-                    f"{info['file_name']} ({path.stat().st_size} bytes)",
-                    flush=True,
-                )
+                print(f"[Cortex] Removing previous/incomplete {info['file_name']} ({path.stat().st_size} bytes)", flush=True)
                 path.unlink()
 
             try:
                 url = cortex.get_download_url(info["id"])
-
-                print(
-                    f"[Cortex] Downloading {info['file_name']} "
-                    f"(attempt {attempt})",
-                    flush=True,
-                )
+                print(f"[Cortex] Downloading {info['file_name']} (attempt {attempt}, rank={rank})", flush=True)
 
                 result = subprocess.run([
-                    "curl",
-                    "-L",
-                    "--fail",
-                    "--show-error",
+                    "curl", "-L", "--fail", "--show-error",
                     "--connect-timeout", "30",
                     "--retry", "3",
                     "--retry-delay", "5",
-                    "-o", str(path),
-                    url,
+                    "-o", str(path), url,
                 ])
 
                 actual_size = path.stat().st_size if path.exists() else 0
 
-                if (
-                    result.returncode == 0
-                    and path.exists()
-                    and actual_size == expected_size
-                    and is_valid_archive(path)
-                ):
-                    print(
-                        f"[Cortex] Download complete: {info['file_name']} "
-                        f"({actual_size} bytes)",
-                        flush=True,
-                    )
+                if result.returncode == 0 and path.exists() and actual_size == expected_size and is_valid_archive(path):
+                    print(f"[Cortex] Download complete: {info['file_name']} ({actual_size} bytes, rank={rank})", flush=True)
                     return path
 
-                print(
-                    f"[Cortex] Download failed/incomplete: "
-                    f"{info['file_name']}, "
-                    f"curl={result.returncode}, "
-                    f"size={actual_size}, "
-                    f"expected={expected_size}",
-                    flush=True,
-                )
+                print(f"[Cortex] Download failed/incomplete: {info['file_name']}, rank={rank}, curl={result.returncode}, size={actual_size}, expected={expected_size}", flush=True)
+
+                # Diagnostic information for intermittent curl write failures.
+                try:
+                    usage = shutil.disk_usage(self.cache_dir)
+                    files = [p for p in self.cache_dir.rglob("*") if p.is_file()]
+                    cache_size = sum(p.stat().st_size for p in files)
+                    print(
+                        f"[Cortex] STORAGE DEBUG: rank={rank}, "
+                        f"attempt={attempt}, "
+                        f"free={usage.free / 1024**3:.2f} GB, "
+                        f"used={usage.used / 1024**3:.2f} GB, "
+                        f"cache={cache_size / 1024**3:.2f} GB, "
+                        f"files={len(files)}, "
+                        f"failed_file={info['file_name']}, "
+                        f"failed_size={actual_size / 1024**3:.2f} GB",
+                        flush=True,
+                    )
+                except Exception as e:
+                    print(f"[Cortex] Failed to collect storage diagnostics: {e}", flush=True)
 
             except Exception as e:
-                print(
-                    f"[Cortex] Failed to get/download {info['file_name']}: {e}",
-                    flush=True,
-                )
+                print(f"[Cortex] Failed to get/download {info['file_name']}: {e}", flush=True)
 
             if path.exists():
                 path.unlink()
