@@ -11,7 +11,6 @@ import time
 import torch
 import shutil
 
-
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
 
@@ -30,9 +29,6 @@ def is_valid_archive(path):
         return result.returncode == 0
 
     return False
-
-
-
 
 class CortexSession:
     def __init__(self, access_url):
@@ -107,7 +103,6 @@ class CortexSession:
         files.sort(key=lambda x: x["file_name"])
         return files
 
-
 class PrefetchDataLoader:
     def __init__(self, dataloader, prefetch_batches=2):
         self.dataloader = dataloader
@@ -157,8 +152,6 @@ class PrefetchDataLoader:
 
             yield item
 
-
-
 class GastroNetCortexDataset(IterableDataset):
     def __init__(self, access_url, cache_dir="./cortex_cache", shuffle_shards=True, shuffle_images=True, seed=42, decode_workers=4, prefetch_size=1024):
         super().__init__()
@@ -177,56 +170,68 @@ class GastroNetCortexDataset(IterableDataset):
         path = self.cache_dir / info["file_name"]
         expected_size = int(info["size"])
         attempt = 0
-        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
 
         while True:
             attempt += 1
 
             if path.exists():
-                print(f"[Cortex] Removing previous/incomplete {info['file_name']} ({path.stat().st_size} bytes)", flush=True)
+                print(
+                    f"[Cortex] Removing previous/incomplete "
+                    f"{info['file_name']} ({path.stat().st_size} bytes)",
+                    flush=True,
+                )
                 path.unlink()
 
             try:
                 url = cortex.get_download_url(info["id"])
-                print(f"[Cortex] Downloading {info['file_name']} (attempt {attempt}, rank={rank})", flush=True)
+
+                print(
+                    f"[Cortex] Downloading {info['file_name']} "
+                    f"(attempt {attempt})",
+                    flush=True,
+                )
 
                 result = subprocess.run([
-                    "curl", "-L", "--fail", "--show-error",
+                    "curl",
+                    "-L",
+                    "--fail",
+                    "--show-error",
                     "--connect-timeout", "30",
                     "--retry", "3",
                     "--retry-delay", "5",
-                    "-o", str(path), url,
+                    "-o", str(path),
+                    url,
                 ])
 
                 actual_size = path.stat().st_size if path.exists() else 0
 
-                if result.returncode == 0 and path.exists() and actual_size == expected_size and is_valid_archive(path):
-                    print(f"[Cortex] Download complete: {info['file_name']} ({actual_size} bytes, rank={rank})", flush=True)
-                    return path
-
-                print(f"[Cortex] Download failed/incomplete: {info['file_name']}, rank={rank}, curl={result.returncode}, size={actual_size}, expected={expected_size}", flush=True)
-
-                # Diagnostic information for intermittent curl write failures.
-                try:
-                    usage = shutil.disk_usage(self.cache_dir)
-                    files = [p for p in self.cache_dir.rglob("*") if p.is_file()]
-                    cache_size = sum(p.stat().st_size for p in files)
+                if (
+                    result.returncode == 0
+                    and path.exists()
+                    and actual_size == expected_size
+                    and is_valid_archive(path)
+                ):
                     print(
-                        f"[Cortex] STORAGE DEBUG: rank={rank}, "
-                        f"attempt={attempt}, "
-                        f"free={usage.free / 1024**3:.2f} GB, "
-                        f"used={usage.used / 1024**3:.2f} GB, "
-                        f"cache={cache_size / 1024**3:.2f} GB, "
-                        f"files={len(files)}, "
-                        f"failed_file={info['file_name']}, "
-                        f"failed_size={actual_size / 1024**3:.2f} GB",
+                        f"[Cortex] Download complete: {info['file_name']} "
+                        f"({actual_size} bytes)",
                         flush=True,
                     )
-                except Exception as e:
-                    print(f"[Cortex] Failed to collect storage diagnostics: {e}", flush=True)
+                    return path
+
+                print(
+                    f"[Cortex] Download failed/incomplete: "
+                    f"{info['file_name']}, "
+                    f"curl={result.returncode}, "
+                    f"size={actual_size}, "
+                    f"expected={expected_size}",
+                    flush=True,
+                )
 
             except Exception as e:
-                print(f"[Cortex] Failed to get/download {info['file_name']}: {e}", flush=True)
+                print(
+                    f"[Cortex] Failed to get/download {info['file_name']}: {e}",
+                    flush=True,
+                )
 
             if path.exists():
                 path.unlink()
@@ -242,7 +247,6 @@ class GastroNetCortexDataset(IterableDataset):
             return name, image, None
         except Exception as e:
             return name, None, e
-
 
     def iter_7z_images(self, path, rng, decode_pool):
         extract_dir = self.cache_dir / f"{path.stem}_extracted"
@@ -321,15 +325,31 @@ class GastroNetCortexDataset(IterableDataset):
             shutil.rmtree(extract_dir, ignore_errors=True)
 
     def __iter__(self):
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+
+        # Clean Cortex cache before every epoch.
+        if rank == 0:
+            print("[Cortex] Cleaning cache before epoch...", flush=True)
+            for p in self.cache_dir.iterdir():
+                try:
+                    if p.is_dir():
+                        shutil.rmtree(p)
+                    else:
+                        p.unlink()
+                except FileNotFoundError:
+                    pass
+            print("[Cortex] Cache cleaned.", flush=True)
+
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+
         cortex = CortexSession(self.access_url)
         shards = cortex.get_files()
         rng = random.Random(self.seed)
 
         if self.shuffle_shards:
             rng.shuffle(shards)
-
-        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
-        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
 
         # Drop the final incomplete group so every rank gets the same number of shards.
         usable_shards = (len(shards) // world_size) * world_size
@@ -427,9 +447,6 @@ class GastroNetCortexDataset(IterableDataset):
                         pass
 
                 self.shard_bar.update(1)
-
-
-
 
 def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
     access_url = os.environ.get("CORTEX_ACCESS_URL")
