@@ -38,34 +38,51 @@ class CortexSession:
         self.login()
 
     def login(self):
-        r = self.session.get(self.access_url, allow_redirects=True, timeout=60)
-        r.raise_for_status()
-        login_page_url = r.url
-        token = login_page_url.rstrip("/").split("/")[-1]
+        attempt = 0
 
-        b = self.session.get(
-            f"{BASE_URL}/api/bootstrap/",
-            headers={"Origin": BASE_URL, "Referer": login_page_url},
-            timeout=60,
-        )
-        b.raise_for_status()
-        self.csrf = b.json()["csrf_token"]
+        while True:
+            attempt += 1
 
-        r = self.session.post(
-            f"{BASE_URL}/api/request/login/",
-            json={"token": token},
-            headers={"X-Csrftoken": self.csrf, "Origin": BASE_URL, "Referer": login_page_url},
-            timeout=60,
-        )
-        r.raise_for_status()
+            try:
+                r = self.session.get(self.access_url, allow_redirects=True, timeout=60)
+                r.raise_for_status()
+                login_page_url = r.url
+                token = login_page_url.rstrip("/").split("/")[-1]
 
-        b = self.session.get(
-            f"{BASE_URL}/api/bootstrap/",
-            headers={"Origin": BASE_URL, "Referer": f"{BASE_URL}/dataset-provider/request/download/"},
-            timeout=60,
-        )
-        b.raise_for_status()
-        self.csrf = b.json()["csrf_token"]
+                b = self.session.get(
+                    f"{BASE_URL}/api/bootstrap/",
+                    headers={"Origin": BASE_URL, "Referer": login_page_url},
+                    timeout=60,
+                )
+                b.raise_for_status()
+                self.csrf = b.json()["csrf_token"]
+
+                r = self.session.post(
+                    f"{BASE_URL}/api/request/login/",
+                    json={"token": token},
+                    headers={"X-Csrftoken": self.csrf, "Origin": BASE_URL, "Referer": login_page_url},
+                    timeout=60,
+                )
+                r.raise_for_status()
+
+                b = self.session.get(
+                    f"{BASE_URL}/api/bootstrap/",
+                    headers={"Origin": BASE_URL, "Referer": f"{BASE_URL}/dataset-provider/request/download/"},
+                    timeout=60,
+                )
+                b.raise_for_status()
+                self.csrf = b.json()["csrf_token"]
+
+                return
+
+            except Exception as e:
+                wait_seconds = min(10 * attempt, 120)
+                print(
+                    f"[Cortex] Login failed (attempt {attempt}): {e}. "
+                    f"Retrying in {wait_seconds}s...",
+                    flush=True,
+                )
+                time.sleep(wait_seconds)
 
     def get_download_url(self, file_id):
         endpoint = f"{BASE_URL}/api/provided_file/{file_id}/download_url/"
