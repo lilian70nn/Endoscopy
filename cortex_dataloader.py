@@ -14,6 +14,14 @@ import shutil
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
 
+ACCESS_URL_FILE = Path(__file__).resolve().parent / "cortex_access_url.txt"
+
+def get_access_url():
+    url = ACCESS_URL_FILE.read_text().strip()
+    if not url:
+        raise RuntimeError("Cortex access URL file is empty")
+    return url
+
 def is_valid_archive(path):
     suffix = path.suffix.lower()
 
@@ -44,6 +52,7 @@ class CortexSession:
             attempt += 1
 
             try:
+                self.access_url = get_access_url()
                 r = self.session.get(self.access_url, allow_redirects=True, timeout=60)
                 r.raise_for_status()
                 login_page_url = r.url
@@ -466,9 +475,9 @@ class GastroNetCortexDataset(IterableDataset):
                 self.shard_bar.update(1)
 
 def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
-    access_url = os.environ.get("CORTEX_ACCESS_URL")
+    access_url = get_access_url()
     if not access_url:
-        raise RuntimeError("CORTEX_ACCESS_URL is not set")
+        raise RuntimeError("Cortex access URL file is empty")
 
     dataset = GastroNetCortexDataset(
         access_url=access_url,
