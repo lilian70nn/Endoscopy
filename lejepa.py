@@ -10,6 +10,7 @@ for later downstream evaluation.
 """
 
 import csv
+import re
 from pathlib import Path
 from tqdm.auto import tqdm
 
@@ -24,6 +25,7 @@ from utils import cosine_value, get_epoch_progress, get_lr
 
 from datetime import timedelta
 from lightning.pytorch.strategies import DDPStrategy
+from lightning.pytorch.callbacks import ModelCheckpoint
 
 
 # Default LeJEPA settings
@@ -114,7 +116,46 @@ def sigreg(x, global_step, num_slices=256):
 
     return torch.trapz(err, t, dim=1) * n
 
+def find_latest_checkpoint(output_dir):
+    output_dir = Path(output_dir)
 
+    checkpoints = []
+
+    for path in output_dir.glob("checkpoint_epoch_*.pth"):
+        match = re.fullmatch(
+            r"checkpoint_epoch_(\d+)\.pth",
+            path.name,
+        )
+
+        if match:
+            checkpoints.append((int(match.group(1)), path))
+
+    if not checkpoints:
+        return None
+
+    return max(checkpoints, key=lambda x: x[0])[1]
+
+
+class EpochCheckpoint(ModelCheckpoint):
+    FILE_EXTENSION = ".pth"
+
+    def __init__(self, output_dir):
+        super().__init__(
+            dirpath=output_dir,
+            filename="checkpoint_epoch_{epoch_plus_one}",
+            save_top_k=-1,
+            every_n_epochs=1,
+            save_on_train_epoch_end=True,
+            save_weights_only=False,
+            auto_insert_metric_name=False,
+            enable_version_counter=False,
+        )
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        trainer.callback_metrics["epoch_plus_one"] = (
+            trainer.current_epoch + 1
+        )
+        super().on_train_epoch_end(trainer, pl_module)
 
 # Lightning LeJEPA trainer
 
@@ -139,6 +180,22 @@ class LeJEPATrainer(pl.LightningModule):
         per_image_crops = [self.augmentation(image.convert("RGB") if isinstance(image, Image.Image) else image) for image in batch]
         ncrops = self.cfg["num_local_crops"] + 2
         return [torch.stack([per_image_crops[b][crop_id] for b in range(len(per_image_crops))]).to(self.device, non_blocking=True) for crop_id in range(ncrops)]
+
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint["epoch_number"] = self.current_epoch + 1
+        checkpoint["model"] = self.backbone.state_dict()
+        checkpoint["previous_steps"] = (
+            self.current_epoch_steps
+            if self.current_epoch_steps > 0
+            else self.previous_steps
+        )
+        checkpoint["current_epoch_steps"] = 0
+
+    def on_load_checkpoint(self, checkpoint):
+        self.previous_steps = checkpoint.get("previous_steps")
+        self.current_epoch_steps = checkpoint.get(
+            "current_epoch_steps", 0
+        )
 
     def training_step(self, batch, batch_idx):
         optimizer = self.optimizers()
@@ -193,11 +250,6 @@ class LeJEPATrainer(pl.LightningModule):
         output_dir.mkdir(parents=True, exist_ok=True)
         epoch = self.current_epoch + 1
 
-        torch.save({
-            "epoch": epoch,
-            "model": self.backbone.state_dict()
-        }, output_dir / f"checkpoint_epoch_{epoch}.pth")
-
         metrics = self.trainer.callback_metrics
         train_loss = metrics.get("train_loss_epoch")
         pred_loss = metrics.get("pred_loss_epoch")
@@ -218,7 +270,14 @@ class LeJEPATrainer(pl.LightningModule):
 
     def on_train_start(self):
         if self.global_rank == 0:
-            self.epoch_bar = tqdm(total=self.cfg["epochs"], desc="Epoch", position=0, leave=True, dynamic_ncols=True)
+            self.epoch_bar = tqdm(
+                total=self.cfg["epochs"],
+                initial=self.current_epoch,
+                desc="Epoch",
+                position=0,
+                leave=True,
+                dynamic_ncols=True,
+            )
 
     def on_train_epoch_start(self):
         if self.epoch_bar is not None: self.epoch_bar.set_description(f"Epoch {self.current_epoch + 1}/{self.cfg['epochs']}")
@@ -231,21 +290,53 @@ class LeJEPATrainer(pl.LightningModule):
 
 def train_lejepa(model, dataloader, config=None):
     cfg = LEJEPA_DEFAULTS.copy()
-    if config is not None: cfg.update(config)
+    if config is not None:
+        cfg.update(config)
+
     pl.seed_everything(0, workers=True)
 
     feature_dim = model.config.hidden_size
-
     module = LeJEPATrainer(model, feature_dim, cfg)
+
+    checkpoint_path = find_latest_checkpoint(cfg["output_dir"])
+
+    if checkpoint_path is not None:
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+
+        if "state_dict" not in checkpoint or "loops" not in checkpoint:
+            raise RuntimeError(
+                f"[Resume] {checkpoint_path} is an old backbone-only checkpoint. "
+                "It cannot restore full LeJEPA training state. "
+                "Please use a full Lightning checkpoint."
+            )
+
+        del checkpoint
+
+    if checkpoint_path is None:
+        print("[Resume] No checkpoint found. Starting from epoch 0.")
+    else:
+        print(f"[Resume] Found checkpoint: {checkpoint_path}")
+
     trainer = pl.Trainer(
         max_epochs=cfg["epochs"],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=cfg["devices"],
-        strategy=DDPStrategy(timeout=timedelta(hours=6)) if cfg["devices"] > 1 else "auto",
+        strategy=DDPStrategy(timeout=timedelta(hours=6))
+        if cfg["devices"] > 1 else "auto",
         precision="16-mixed" if torch.cuda.is_available() else "32-true",
         logger=False,
-        enable_checkpointing=False,
+        enable_checkpointing=True,
+        callbacks=[EpochCheckpoint(cfg["output_dir"])],
         enable_progress_bar=False,
         log_every_n_steps=10,
     )
-    trainer.fit(module, train_dataloaders=dataloader)
+
+    trainer.fit(
+        module,
+        train_dataloaders=dataloader,
+        ckpt_path=str(checkpoint_path) if checkpoint_path else None,
+    )

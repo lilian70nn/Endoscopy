@@ -15,6 +15,7 @@ import copy
 import csv
 import math
 import random
+import re
 from pathlib import Path
 from tqdm.auto import tqdm
 import numpy as np
@@ -27,6 +28,7 @@ from torchvision import transforms
 import lightning.pytorch as pl
 from datetime import timedelta
 from lightning.pytorch.strategies import DDPStrategy
+from lightning.pytorch.callbacks import ModelCheckpoint
 
 from utils import cosine_value, get_epoch_progress, get_lr
 
@@ -241,6 +243,48 @@ def cancel_gradients_last_layer(epoch, model, freeze_last_layer):
         if "last_layer" in name: p.grad = None
 
 
+def find_latest_checkpoint(output_dir):
+    output_dir = Path(output_dir)
+
+    checkpoints = []
+
+    for path in output_dir.glob("checkpoint_epoch_*.pth"):
+        match = re.fullmatch(
+            r"checkpoint_epoch_(\d+)\.pth",
+            path.name,
+        )
+
+        if match:
+            checkpoints.append((int(match.group(1)), path))
+
+    if not checkpoints:
+        return None
+
+    return max(checkpoints, key=lambda x: x[0])[1]
+
+
+
+class EpochCheckpoint(ModelCheckpoint):
+    FILE_EXTENSION = ".pth"
+
+    def __init__(self, output_dir):
+        super().__init__(
+            dirpath=output_dir,
+            filename="checkpoint_epoch_{epoch_plus_one}",
+            save_top_k=-1,
+            every_n_epochs=1,
+            save_on_train_epoch_end=True,
+            save_weights_only=False,
+            auto_insert_metric_name=False,
+            enable_version_counter=False,
+        )
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        trainer.callback_metrics["epoch_plus_one"] = (
+            trainer.current_epoch + 1
+        )
+        super().on_train_epoch_end(trainer, pl_module)
+
 # Lightning DINO trainer
 
 class DINOTrainer(pl.LightningModule):
@@ -269,6 +313,21 @@ class DINOTrainer(pl.LightningModule):
         per_image_crops = [self.augmentation(image.convert("RGB") if isinstance(image, Image.Image) else image) for image in batch]
         ncrops = self.cfg["local_crops_number"] + 2
         return [torch.stack([per_image_crops[b][crop_id] for b in range(len(per_image_crops))]).to(self.device, non_blocking=True) for crop_id in range(ncrops)]
+
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint["epoch_number"] = self.current_epoch + 1
+        checkpoint["model"] = self.teacher.backbone.state_dict()
+        checkpoint["previous_steps"] = self.current_epoch_steps if self.current_epoch_steps > 0 else self.previous_steps
+        checkpoint["current_epoch_steps"] = 0
+        checkpoint["last_momentum"] = self.last_momentum
+
+    def on_load_checkpoint(self, checkpoint):
+        self.previous_steps = checkpoint.get("previous_steps")
+        self.current_epoch_steps = checkpoint.get("current_epoch_steps", 0)
+        self.last_momentum = checkpoint.get(
+            "last_momentum",
+            self.cfg["momentum_teacher"],
+        )
 
     def training_step(self, batch, batch_idx):
         optimizer = self.optimizers()
@@ -347,11 +406,6 @@ class DINOTrainer(pl.LightningModule):
         output_dir.mkdir(parents=True, exist_ok=True)
         epoch = self.current_epoch + 1
 
-        torch.save({
-            "epoch": epoch,
-            "model": self.teacher.backbone.state_dict()
-        }, output_dir / f"checkpoint_epoch_{epoch}.pth")
-
         train_loss = self.trainer.callback_metrics.get("train_loss_epoch")
         log_file = output_dir / "training_log.csv"
         write_header = not log_file.exists()
@@ -371,6 +425,7 @@ class DINOTrainer(pl.LightningModule):
         if self.global_rank == 0:
             self.epoch_bar = tqdm(
                 total=self.cfg["epochs"],
+                initial=self.current_epoch,
                 desc="Epoch",
                 position=0,
                 leave=True,
@@ -391,11 +446,53 @@ class DINOTrainer(pl.LightningModule):
 
 def train_dino(model, dataloader, config=None):
     cfg = DINO_DEFAULTS.copy()
-    if config is not None: cfg.update(config)
+    if config is not None:
+        cfg.update(config)
+
     pl.seed_everything(0, workers=True)
 
     feature_dim = model.config.hidden_size
-
     module = DINOTrainer(model, feature_dim, cfg)
-    trainer = pl.Trainer(max_epochs=cfg["epochs"], accelerator="gpu" if torch.cuda.is_available() else "cpu", devices=cfg.get("devices", 1), strategy=DDPStrategy(timeout=timedelta(hours=6)) if cfg.get("devices", 1) > 1 else "auto", precision="16-mixed" if torch.cuda.is_available() else "32-true", logger=False, enable_checkpointing=False, enable_progress_bar=False, log_every_n_steps=10)
-    trainer.fit(module, train_dataloaders=dataloader)
+
+    checkpoint_path = find_latest_checkpoint(cfg["output_dir"])
+
+    if checkpoint_path is not None:
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+
+        if "state_dict" not in checkpoint or "loops" not in checkpoint:
+            raise RuntimeError(
+                f"[Resume] {checkpoint_path} is an old backbone-only checkpoint. "
+                "It cannot restore full DINO training state. "
+                "Please use a full Lightning checkpoint."
+            )
+
+        del checkpoint
+
+    if checkpoint_path is None:
+        print("[Resume] No checkpoint found. Starting from epoch 0.")
+    else:
+        print(f"[Resume] Found checkpoint: {checkpoint_path}")
+
+    trainer = pl.Trainer(
+        max_epochs=cfg["epochs"],
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=cfg.get("devices", 1),
+        strategy=DDPStrategy(timeout=timedelta(hours=6))
+        if cfg.get("devices", 1) > 1 else "auto",
+        precision="16-mixed" if torch.cuda.is_available() else "32-true",
+        logger=False,
+        enable_checkpointing=True,
+        callbacks=[EpochCheckpoint(cfg["output_dir"])],
+        enable_progress_bar=False,
+        log_every_n_steps=10,
+    )
+
+    trainer.fit(
+        module,
+        train_dataloaders=dataloader,
+        ckpt_path=str(checkpoint_path) if checkpoint_path else None,
+    )

@@ -10,6 +10,7 @@ import torch.distributed as dist
 import time
 import torch
 import shutil
+import socket
 
 BASE_URL = "https://cortex.thetavision.nl"
 DATASET_ID = 2
@@ -217,17 +218,22 @@ class GastroNetCortexDataset(IterableDataset):
                     flush=True,
                 )
 
-                result = subprocess.run([
-                    "curl",
-                    "-L",
-                    "--fail",
-                    "--show-error",
-                    "--connect-timeout", "30",
-                    "--retry", "3",
-                    "--retry-delay", "5",
-                    "-o", str(path),
-                    url,
-                ])
+                result = subprocess.run(
+                    [
+                        "curl",
+                        "-L",
+                        "--fail",
+                        "--show-error",
+                        "--connect-timeout", "30",
+                        "--retry", "3",
+                        "--retry-delay", "5",
+                        "-o", str(path),
+                        url,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
 
                 actual_size = path.stat().st_size if path.exists() else 0
 
@@ -245,17 +251,71 @@ class GastroNetCortexDataset(IterableDataset):
                     return path
 
                 print(
-                    f"[Cortex] Download failed/incomplete: "
-                    f"{info['file_name']}, "
-                    f"curl={result.returncode}, "
-                    f"size={actual_size}, "
-                    f"expected={expected_size}",
+                    f"[Cortex] Download failed/incomplete:\n"
+                    f"  file={info['file_name']}\n"
+                    f"  attempt={attempt}\n"
+                    f"  rank={dist.get_rank() if dist.is_available() and dist.is_initialized() else 0}\n"
+                    f"  hostname={socket.gethostname()}\n"
+                    f"  curl_returncode={result.returncode}\n"
+                    f"  downloaded_bytes={actual_size}\n"
+                    f"  expected_bytes={expected_size}\n"
+                    f"  curl_stderr={result.stderr.strip()}",
                     flush=True,
                 )
 
+                # Diagnose local filesystem write failures.
+                if result.returncode == 23:
+                    try:
+                        st = os.statvfs(self.cache_dir)
+
+                        print(
+                            f"[Cortex][Storage] filesystem_available_bytes="
+                            f"{st.f_bavail * st.f_frsize}",
+                            flush=True,
+                        )
+
+                    except OSError as e:
+                        print(
+                            f"[Cortex][Storage] statvfs error: "
+                            f"errno={e.errno}, {e}",
+                            flush=True,
+                        )
+
+                    probe = self.cache_dir / f".write_probe_{os.getpid()}"
+
+                    try:
+                        with open(probe, "wb") as f:
+                            f.write(b"\0" * 1024 * 1024)
+                            f.flush()
+                            os.fsync(f.fileno())
+
+                        print(
+                            "[Cortex][Storage] 1 MiB write probe: OK",
+                            flush=True,
+                        )
+
+                    except OSError as e:
+                        print(
+                            f"[Cortex][Storage] write probe failed: "
+                            f"errno={e.errno}, {e}",
+                            flush=True,
+                        )
+
+                    finally:
+                        try:
+                            probe.unlink()
+                        except FileNotFoundError:
+                            pass
+                        except OSError as e:
+                            print(
+                                f"[Cortex][Storage] probe cleanup failed: {e}",
+                                flush=True,
+                            )
+
             except Exception as e:
                 print(
-                    f"[Cortex] Failed to get/download {info['file_name']}: {e}",
+                    f"[Cortex] Failed to get/download {info['file_name']}: "
+                    f"{type(e).__name__}: {e}",
                     flush=True,
                 )
 
