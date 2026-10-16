@@ -140,44 +140,42 @@ class PrefetchDataLoader:
         return self.dataloader.batch_size
 
     def __iter__(self):
-        q = queue.Queue(maxsize=self.prefetch_batches)
-        sentinel = object()
+        iterator = iter(self.dataloader)
 
-        def producer():
-            try:
-                for batch in self.dataloader:
-                    q.put(batch)
-            except Exception as e:
-                q.put(e)
-            finally:
-                q.put(sentinel)
+        try:
+            while True:
+                try:
+                    batch = next(iterator)
+                    has_batch = 1
+                except StopIteration:
+                    batch = None
+                    has_batch = 0
 
-        thread = threading.Thread(target=producer, daemon=True)
-        thread.start()
+                if dist.is_available() and dist.is_initialized():
+                    flag = torch.tensor(
+                        has_batch,
+                        device=torch.cuda.current_device(),
+                        dtype=torch.int32,
+                    )
 
-        while True:
-            item = q.get()
+                    dist.all_reduce(
+                        flag,
+                        op=dist.ReduceOp.MIN,
+                    )
 
-            if isinstance(item, Exception):
-                raise item
+                    all_have_batch = flag.item() == 1
+                else:
+                    all_have_batch = has_batch == 1
 
-            has_batch = 0 if item is sentinel else 1
+                if not all_have_batch:
+                    break
 
-            if dist.is_available() and dist.is_initialized():
-                flag = torch.tensor(
-                    has_batch,
-                    device=torch.cuda.current_device(),
-                    dtype=torch.int32,
-                )
-                dist.all_reduce(flag, op=dist.ReduceOp.MIN)
-                all_have_batch = flag.item() == 1
-            else:
-                all_have_batch = has_batch == 1
+                yield batch
 
-            if not all_have_batch:
-                break
-
-            yield item
+        finally:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
 
 class GastroNetCortexDataset(IterableDataset):
     def __init__(self, access_url, cache_dir="./cortex_cache", shuffle_shards=True, shuffle_images=True, seed=42, decode_workers=4, prefetch_size=1024):
