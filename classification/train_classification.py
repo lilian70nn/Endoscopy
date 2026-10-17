@@ -117,7 +117,10 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     
-    train_loader, val_loader, label_to_idx = initialize_classification_dataloaders()
+    train_loader, val_loader, label_to_idx = initialize_classification_dataloaders(
+        data_dir="/content/drive/MyDrive/surgdata/labeled-images",
+        batch_size=64,
+    )
     num_classes = len(label_to_idx)
 
     torch.manual_seed(42)
