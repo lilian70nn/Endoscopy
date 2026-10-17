@@ -1,0 +1,90 @@
+import csv
+from pathlib import Path
+import torch
+import torch.nn.functional as F
+from sklearn.metrics import accuracy_score, f1_score
+
+
+
+def compute_loss(logits, targets, edl=False):
+    if not edl:
+        return F.cross_entropy(logits, targets)
+    alpha = F.softplus(logits) + 1.0
+    S = alpha.sum(dim=1, keepdim=True)
+    y = F.one_hot(targets, num_classes=logits.shape[1]).float()
+    loss = (y * (torch.digamma(S) - torch.digamma(alpha))).sum(dim=1).mean()
+    return loss
+
+def get_predictions(logits, edl=False):
+    if edl:
+        alpha = F.softplus(logits) + 1.0
+        probabilities = alpha / alpha.sum(dim=1, keepdim=True)
+        uncertainty = logits.shape[1] / alpha.sum(dim=1)
+    else:
+        probabilities = F.softmax(logits, dim=1)
+        uncertainty = None
+    return probabilities.argmax(dim=1), uncertainty
+
+
+def train_classification(model, train_loader, val_loader, epochs, edl=False, save_dir="./results/classification"):
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    best_f1 = -1.0
+    history = []
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        train_loss, train_count = 0.0, 0
+
+        for images, targets in train_loader:
+            images, targets = images.to(device), targets.to(device).long()
+            optimizer.zero_grad()
+            logits = model(images)
+            loss = compute_loss(logits, targets, edl)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * targets.size(0)
+            train_count += targets.size(0)
+
+        model.eval()
+        val_loss, val_count = 0.0, 0
+        all_preds, all_targets, all_uncertainties = [], [], []
+
+        with torch.no_grad():
+            for images, targets in val_loader:
+                images, targets = images.to(device), targets.to(device).long()
+                logits = model(images)
+                loss = compute_loss(logits, targets, edl)
+                preds, uncertainty = get_predictions(logits, edl)
+                val_loss += loss.item() * targets.size(0)
+                val_count += targets.size(0)
+                all_preds.extend(preds.cpu().tolist())
+                all_targets.extend(targets.cpu().tolist())
+                if uncertainty is not None:
+                    all_uncertainties.extend(uncertainty.cpu().tolist())
+
+        train_loss /= max(train_count, 1)
+        val_loss /= max(val_count, 1)
+        val_acc = accuracy_score(all_targets, all_preds)
+        val_f1 = f1_score(all_targets, all_preds, average="macro", zero_division=0)
+        mean_uncertainty = sum(all_uncertainties) / len(all_uncertainties) if all_uncertainties else None
+
+        row = {"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "val_accuracy": val_acc, "val_macro_f1": val_f1, "val_uncertainty": mean_uncertainty}
+        history.append(row)
+
+        with open(save_dir / "metrics.csv", "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=row.keys())
+            writer.writeheader()
+            writer.writerows(history)
+
+        if val_f1 > best_f1:
+            best_f1 = val_f1
+            torch.save(model.state_dict(), save_dir / "best_model.pt")
+
+        print(f"Epoch {epoch}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Acc: {val_acc:.4f} | Macro-F1: {val_f1:.4f}" + (f" | Uncertainty: {mean_uncertainty:.4f}" if edl else ""))
+
+    print(f"Training finished | Best Val Macro-F1: {best_f1:.4f}")
+    return history
