@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import torch
 import torch.nn.functional as F
+from tqdm.auto import tqdm
 import math
 import torch.nn as nn
 
@@ -119,7 +120,7 @@ def train_segmentation(model, train_loader, val_loader, epochs, edl=False, save_
         model.train()
         train_loss, train_count = 0.0, 0
 
-        for images, masks in train_loader:
+        for images, masks in tqdm(train_loader, desc=f"Train Epoch {epoch}/{epochs}"):
             images, masks = images.to(device), masks.to(device).long()
             optimizer.zero_grad()
             logits = model(images)
@@ -182,7 +183,10 @@ if __name__ == "__main__":
 
     torch.manual_seed(42)
 
-    train_loader, val_loader = initialize_segmentation_dataloaders()
+    train_loader, val_loader = initialize_segmentation_dataloaders(
+        data_dir="/content/drive/MyDrive/surgdata/segmented-images",
+        batch_size=256,
+    )
     siglip2 = initialize_siglip2(initialization="siglip2")
     model = SigLIP2UNet(siglip2, num_classes=2)
 
