@@ -4,6 +4,7 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm.auto import tqdm
 from sklearn.metrics import accuracy_score, f1_score
 from .classification_dataloader import initialize_classification_dataloaders
 from utils import initialize_siglip2
@@ -56,7 +57,7 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
         model.train()
         train_loss, train_count = 0.0, 0
 
-        for images, targets in train_loader:
+        for images, targets in tqdm(train_loader, desc=f"Train Epoch {epoch}/{epochs}"):
             images, targets = images.to(device), targets.to(device).long()
             optimizer.zero_grad()
             logits = model(images)
@@ -119,7 +120,7 @@ if __name__ == "__main__":
     
     train_loader, val_loader, label_to_idx = initialize_classification_dataloaders(
         data_dir="/content/drive/MyDrive/surgdata/labeled-images",
-        batch_size=64,
+        batch_size=256,
     )
     num_classes = len(label_to_idx)
 
