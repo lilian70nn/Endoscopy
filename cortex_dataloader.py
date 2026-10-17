@@ -281,6 +281,10 @@ class GastroNetCortexDataset(IterableDataset):
         else:
             raise RuntimeError(f"Unsupported archive format: {path.name}")
 
+    def __iter__(self):
+        stop_event = threading.Event()
+        yield from self.iter_images(stop_event)
+
     def iter_images(self, stop_event):
         print("[Cortex] Cleaning cache before epoch...", flush=True)
         for path in self.cache_dir.iterdir():
