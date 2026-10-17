@@ -1,8 +1,72 @@
 import csv
 from pathlib import Path
+import argparse
 import torch
 import torch.nn.functional as F
+import math
+import torch.nn as nn
 
+from utils import initialize_siglip2
+from .segmentation_dataloader import initialize_segmentation_dataloaders
+
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class SigLIP2UNet(nn.Module):
+    def __init__(self, siglip2, num_classes=2):
+        super().__init__()
+
+        self.backbone = siglip2.vision_model
+        hidden_size = self.backbone.config.hidden_size
+        self.decoder = nn.Sequential(
+            ConvBlock(hidden_size, 256),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            ConvBlock(256, 128),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            ConvBlock(128, 64),
+            nn.Conv2d(64, num_classes, kernel_size=1),
+        )
+
+    def forward(self, images):
+        outputs = self.backbone(pixel_values=images)
+        tokens = outputs.last_hidden_state
+        batch_size, num_tokens, hidden_size = tokens.shape
+        grid_size = math.isqrt(num_tokens)
+
+        if grid_size * grid_size != num_tokens:
+            raise ValueError(f"Expected square patch grid, got {num_tokens} tokens")
+
+        features = tokens.transpose(1, 2).reshape(
+            batch_size,
+            hidden_size,
+            grid_size,
+            grid_size,
+        )
+
+        logits = self.decoder(features)
+        return F.interpolate(
+            logits,
+            size=images.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+
+    
 
 def compute_loss(logits, masks, edl=False):
     if edl:
@@ -105,3 +169,34 @@ def train_segmentation(model, train_loader, val_loader, epochs, edl=False, save_
 
     print(f"Training finished | Best Val Dice: {best_dice:.4f}")
     return history
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--edl",
+        action="store_true",
+        help="Enable evidential deep learning",
+    )
+    args = parser.parse_args()
+
+    torch.manual_seed(42)
+
+    train_loader, val_loader = initialize_segmentation_dataloaders()
+    siglip2 = initialize_siglip2(initialization="siglip2")
+    model = SigLIP2UNet(siglip2, num_classes=2)
+
+    save_dir = (
+        "./results/segmentation_w_uncertainty"
+        if args.edl
+        else "./results/segmentation_wo_uncertainty"
+    )
+
+    train_segmentation(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        epochs=20,
+        edl=args.edl,
+        save_dir=save_dir,
+    )

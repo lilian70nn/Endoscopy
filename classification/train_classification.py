@@ -1,9 +1,26 @@
 import csv
 from pathlib import Path
+import argparse
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, f1_score
+from .classification_dataloader import initialize_classification_dataloaders
+from utils import initialize_siglip2
 
+
+
+class SigLIP2Classifier(nn.Module):
+    def __init__(self, siglip2, num_classes):
+        super().__init__()
+        self.backbone = siglip2.vision_model
+        hidden_size = self.backbone.config.hidden_size
+        self.head = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, images):
+        outputs = self.backbone(pixel_values=images)
+        features = outputs.pooler_output
+        return self.head(features)
 
 
 def compute_loss(logits, targets, edl=False):
@@ -88,3 +105,38 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
 
     print(f"Training finished | Best Val Macro-F1: {best_f1:.4f}")
     return history
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--edl",
+        action="store_true",
+        help="Enable evidential deep learning",
+    )
+    args = parser.parse_args()
+    
+    train_loader, val_loader, label_to_idx = initialize_classification_dataloaders()
+    num_classes = len(label_to_idx)
+
+    torch.manual_seed(42)
+
+    siglip2 = initialize_siglip2(initialization="siglip2")
+    model = SigLIP2Classifier(siglip2, num_classes)
+
+    save_dir = (
+        "./results/classification_w_uncertainty"
+        if args.edl
+        else "./results/classification_wo_uncertainty"
+
+    )
+
+    train_classification(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        epochs=20,
+        edl=args.edl,
+        save_dir=save_dir,
+    )
