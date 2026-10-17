@@ -418,12 +418,13 @@ class PrefetchDataLoader:
                         producer_error.append(e)
                         print(f"[Cortex][ERROR] Producer cleanup failed: {e}", flush=True)
 
-                while not stop_event.is_set():
+                while True:
                     try:
                         batch_queue.put(sentinel, timeout=0.5)
                         break
                     except queue.Full:
-                        continue
+                        if stop_event.is_set() and batch_queue.full():
+                            break
 
         if rank == 0:
             producer_thread = threading.Thread(target=producer, name="cortex-producer", daemon=False)

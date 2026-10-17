@@ -42,7 +42,7 @@ LEJEPA_DEFAULTS = {
     "warmup_epochs": 1,
     "weight_decay": 0.01,
     "accumulate_grad_batches": 1,
-    "devices": 8,
+    "devices": torch.cuda.device_count() if torch.cuda.is_available() else 1,
     "output_dir": "./lejepa_output"
 }
 

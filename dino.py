@@ -59,7 +59,7 @@ DINO_DEFAULTS = {
     "freeze_last_layer": 1,
     "accumulate_grad_batches": 1,
     "norm_last_layer": True,
-    "devices": 8,
+    "devices": torch.cuda.device_count() if torch.cuda.is_available() else 1,
     "output_dir": "./dino_output"
 }
 
