@@ -122,6 +122,12 @@ if __name__ == "__main__":
         default=None,
         help="Path to DINO or LeJEPA pretrained checkpoint",
     )
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default=None,
+        help="Directory to save training results",
+    )
     args = parser.parse_args()
     
     train_loader, val_loader, label_to_idx = initialize_classification_dataloaders(
@@ -139,12 +145,7 @@ if __name__ == "__main__":
         print(f"Loaded pretrained backbone from: {args.ckpt}")
     model = SigLIP2Classifier(siglip2, num_classes)
 
-    save_dir = (
-        "./results/classification_w_uncertainty"
-        if args.edl
-        else "./results/classification_wo_uncertainty"
-
-    )
+    save_dir = args.save_dir or "./results/classification"
 
     train_classification(
         model=model,
