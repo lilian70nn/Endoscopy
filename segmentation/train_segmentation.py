@@ -179,6 +179,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable evidential deep learning",
     )
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+        help="Path to DINO or LeJEPA pretrained checkpoint",
+    )
     args = parser.parse_args()
 
     torch.manual_seed(42)
@@ -188,6 +194,10 @@ if __name__ == "__main__":
         batch_size=256,
     )
     siglip2 = initialize_siglip2(initialization="siglip2")
+    if args.ckpt is not None:
+        checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
+        siglip2.vision_model.load_state_dict(checkpoint["model"], strict=True)
+        print(f"Loaded pretrained backbone from: {args.ckpt}")
     model = SigLIP2UNet(siglip2, num_classes=2)
 
     save_dir = (
