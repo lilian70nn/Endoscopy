@@ -8,7 +8,7 @@ import math
 import torch.nn as nn
 
 from utils import initialize_siglip2
-from .segmentation_dataloader import initialize_segmentation_dataloaders
+from segmentation.segmentation_dataloader import initialize_segmentation_dataloaders
 
 
 class ConvBlock(nn.Module):

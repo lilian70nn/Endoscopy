@@ -15,7 +15,6 @@ from lejepa import train_lejepa
 
 
 def main():
-    dataloader = initialize_dataloader(batch_size=300,)
 
     experiments = [
         ("dino", "siglip2"),
@@ -25,6 +24,11 @@ def main():
     ]
 
     for ssl_method, initialization in experiments:
+
+        dataloader = initialize_dataloader(
+            batch_size=300,
+            cache_dir=f"./cortex_cache_{ssl_method}_{initialization}",
+        )
         model = initialize_siglip2(initialization=initialization)
 
         if ssl_method == "dino":

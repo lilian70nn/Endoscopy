@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 from sklearn.metrics import accuracy_score, f1_score
-from .classification_dataloader import initialize_classification_dataloaders
+from classification.classification_dataloader import initialize_classification_dataloaders
 from utils import initialize_siglip2
 
 
