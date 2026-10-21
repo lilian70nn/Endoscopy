@@ -196,7 +196,7 @@ if __name__ == "__main__":
     torch.manual_seed(42)
 
     train_loader, val_loader = initialize_segmentation_dataloaders(
-        data_dir="/content/drive/MyDrive/surgdata/segmented-images",
+        data_dir="/content/segmented-images",
         batch_size=256,
     )
     siglip2 = initialize_siglip2(initialization="siglip2")
@@ -206,7 +206,7 @@ if __name__ == "__main__":
         print(f"Loaded pretrained backbone from: {args.ckpt}")
     model = SigLIP2UNet(siglip2, num_classes=2)
 
-    save_dir = args.save_dir or "./results/segmentation"
+    save_dir = args.save_dir or "/content/drive/MyDrive/results/segmentation"
 
     train_segmentation(
         model=model,
