@@ -87,7 +87,7 @@ def evaluate_model(model, loader, device, edl=False, swin=False):
         for images, targets in loader:
             images, targets = images.to(device), targets.to(device).long()
             logits = model(pixel_values=images).logits if swin else model(images)
-            loss = compute_loss(logits, targets, edl)
+            loss = compute_loss(logits, targets, edl, epoch=10)
             preds, uncertainty = get_predictions(logits, edl)
 
             total_loss += loss.item() * targets.size(0)
@@ -196,7 +196,7 @@ class HierarchicalDataset(Dataset):
         return siglip_image, swin_image, int(label)
 
 
-def hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, targets, leaf_to_coarse, group_to_coarse, merge_groups, num_classes, edl=False):
+def hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, targets, leaf_to_coarse, group_to_coarse, merge_groups, num_classes, edl=False, epoch=1):
     coarse_logits = coarse_model(siglip_images)
     if edl:
         alpha = F.softplus(coarse_logits) + 1
@@ -217,7 +217,7 @@ def hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, 
             device=targets.device,
             dtype=torch.long,
         )
-        total_loss = compute_loss(coarse_logits, coarse_targets, edl=True) * targets.size(0)
+        total_loss = compute_loss(coarse_logits, coarse_targets, edl=True, epoch=epoch) * targets.size(0)
 
 
     for group_id, group in enumerate(merge_groups):
@@ -242,7 +242,7 @@ def hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, 
                 device=targets.device,
                 dtype=torch.long,
             )
-            total_loss = total_loss + compute_loss(logits, local_targets, edl=True) * mask.sum()
+            total_loss = total_loss + compute_loss(logits, local_targets, edl=True, epoch=epoch) * mask.sum()
     if edl:
         loss = total_loss / targets.size(0)
     else:
@@ -278,7 +278,7 @@ def train_hierarchical_model(coarse_model, specialists, train_loader, val_loader
             siglip_images, swin_images, targets = siglip_images.to(device), swin_images.to(device), targets.to(device).long()
             optimizer.zero_grad()
 
-            final_probs, loss = hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, targets, leaf_to_coarse, group_to_coarse, merge_groups, num_classes, edl)
+            final_probs, loss = hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, targets, leaf_to_coarse, group_to_coarse, merge_groups, num_classes, edl, epoch=epoch)
 
             loss.backward()
             optimizer.step()

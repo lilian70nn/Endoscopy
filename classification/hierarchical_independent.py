@@ -54,7 +54,7 @@ def train_independent_model(model, train_loader, val_loader, epochs, checkpoint_
             images, targets = images.to(device), targets.to(device).long()
             optimizer.zero_grad()
             logits = model(pixel_values=images).logits if swin else model(images)
-            loss = compute_loss(logits, targets, edl)
+            loss = compute_loss(logits, targets, edl, epoch=epoch)
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * targets.size(0)
@@ -67,7 +67,7 @@ def train_independent_model(model, train_loader, val_loader, epochs, checkpoint_
             for images, targets in val_loader:
                 images, targets = images.to(device), targets.to(device).long()
                 logits = model(pixel_values=images).logits if swin else model(images)
-                loss = compute_loss(logits, targets, edl)
+                loss = compute_loss(logits, targets, edl, epoch=epoch)
                 preds, uncertainty = get_predictions(logits, edl)
                 val_loss += loss.item() * targets.size(0)
                 val_count += targets.size(0)

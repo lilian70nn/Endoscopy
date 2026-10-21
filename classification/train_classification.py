@@ -28,14 +28,33 @@ class SigLIP2Classifier(nn.Module):
         return self.head(features)
 
 
-def compute_loss(logits, targets, edl=False):
+def kl_divergence(alpha):
+    beta = torch.ones_like(alpha)
+
+    sum_alpha = alpha.sum(dim=1, keepdim=True)
+    sum_beta = beta.sum(dim=1, keepdim=True)
+
+    log_b = torch.lgamma(sum_alpha) - torch.lgamma(alpha).sum(dim=1, keepdim=True)
+    log_b_uni = torch.lgamma(beta).sum(dim=1, keepdim=True) - torch.lgamma(sum_beta)
+
+    dg = torch.digamma(alpha) - torch.digamma(sum_alpha)
+    kl = ((alpha - beta) * dg).sum(dim=1, keepdim=True) + log_b + log_b_uni
+
+    return kl.mean()
+
+
+def compute_loss(logits, targets, edl=False, epoch=1, annealing_epochs=10):
     if not edl:
         return F.cross_entropy(logits, targets)
     alpha = F.softplus(logits) + 1.0
     S = alpha.sum(dim=1, keepdim=True)
     y = F.one_hot(targets, num_classes=logits.shape[1]).float()
-    loss = (y * (torch.digamma(S) - torch.digamma(alpha))).sum(dim=1).mean()
-    return loss
+    edl_loss = (y * (torch.digamma(S) - torch.digamma(alpha))).sum(dim=1).mean()
+    adjusted_alpha = y + (1 - y) * alpha
+    kl_loss = kl_divergence(adjusted_alpha)
+
+    annealing_coef = min(1.0, epoch / annealing_epochs)
+    return edl_loss + annealing_coef * kl_loss
 
 def get_predictions(logits, edl=False):
     if edl:
@@ -65,7 +84,7 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
             images, targets = images.to(device), targets.to(device).long()
             optimizer.zero_grad()
             logits = model(images)
-            loss = compute_loss(logits, targets, edl)
+            loss = compute_loss(logits, targets, edl, epoch=epoch)
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * targets.size(0)
@@ -79,7 +98,7 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
             for images, targets in val_loader:
                 images, targets = images.to(device), targets.to(device).long()
                 logits = model(images)
-                loss = compute_loss(logits, targets, edl)
+                loss = compute_loss(logits, targets, edl, epoch=epoch)
                 preds, uncertainty = get_predictions(logits, edl)
                 val_loss += loss.item() * targets.size(0)
                 val_count += targets.size(0)
