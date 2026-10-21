@@ -212,7 +212,7 @@ if __name__ == "__main__":
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=20,
+        epochs=15,
         edl=args.edl,
         save_dir=save_dir,
     )
