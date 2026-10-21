@@ -10,7 +10,6 @@ from classification.classification_dataloader import initialize_classification_d
 from utils import initialize_siglip2
 
 
-
 class SigLIP2Classifier(nn.Module):
     def __init__(self, siglip2, num_classes):
         super().__init__()
@@ -111,6 +110,7 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--hierarchical", action="store_true")
     parser.add_argument(
         "--edl",
         action="store_true",
@@ -151,7 +151,21 @@ if __name__ == "__main__":
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=20,
+        epochs=2,
         edl=args.edl,
         save_dir=save_dir,
     )
+
+    if args.hierarchical:
+        from classification.hierarchical import train_hierarchical_classifier
+        train_hierarchical_classifier(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            label_to_idx=label_to_idx,
+            ckpt_path=args.ckpt,
+            single_stage_ckpt=str(Path(save_dir) / "best_model.pt"),
+            edl=args.edl,
+            save_dir=str(Path(save_dir) / "hierarchical"),
+            epochs=2,
+        )
