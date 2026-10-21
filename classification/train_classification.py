@@ -46,15 +46,13 @@ def kl_divergence(alpha):
 def compute_loss(logits, targets, edl=False, epoch=1, annealing_epochs=10):
     if not edl:
         return F.cross_entropy(logits, targets)
+
     alpha = F.softplus(logits) + 1.0
     S = alpha.sum(dim=1, keepdim=True)
     y = F.one_hot(targets, num_classes=logits.shape[1]).float()
-    edl_loss = (y * (torch.digamma(S) - torch.digamma(alpha))).sum(dim=1).mean()
-    adjusted_alpha = y + (1 - y) * alpha
-    kl_loss = kl_divergence(adjusted_alpha)
 
-    annealing_coef = min(1.0, epoch / annealing_epochs)
-    return edl_loss + annealing_coef * kl_loss
+    edl_loss = (y * (torch.digamma(S) - torch.digamma(alpha))).sum(dim=1).mean()
+    return edl_loss
 
 def get_predictions(logits, edl=False):
     if edl:
@@ -189,7 +187,7 @@ if __name__ == "__main__":
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=15,
+        epochs=25,
         edl=args.edl,
         save_dir=save_dir,
     )
@@ -205,5 +203,5 @@ if __name__ == "__main__":
             single_stage_ckpt=str(Path(save_dir) / "best_model.pt"),
             edl=args.edl,
             save_dir=str(Path(save_dir) / "hierarchical_independent"),
-            epochs=15,
+            epochs=25,
         )
