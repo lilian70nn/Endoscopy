@@ -131,7 +131,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     train_loader, val_loader, label_to_idx = initialize_classification_dataloaders(
-        data_dir="/content/drive/MyDrive/surgdata/labeled-images",
+        data_dir="/content/labeled-images",
         batch_size=512,
     )
     num_classes = len(label_to_idx)
@@ -145,13 +145,13 @@ if __name__ == "__main__":
         print(f"Loaded pretrained backbone from: {args.ckpt}")
     model = SigLIP2Classifier(siglip2, num_classes)
 
-    save_dir = args.save_dir or "./results/classification"
+    save_dir = args.save_dir or "/content/drive/MyDrive/results/classification"
 
     train_classification(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=2,
+        epochs=15,
         edl=args.edl,
         save_dir=save_dir,
     )
@@ -167,5 +167,5 @@ if __name__ == "__main__":
             single_stage_ckpt=str(Path(save_dir) / "best_model.pt"),
             edl=args.edl,
             save_dir=str(Path(save_dir) / "hierarchical"),
-            epochs=2,
+            epochs=15,
         )

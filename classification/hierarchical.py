@@ -341,7 +341,7 @@ def train_hierarchical_classifier(model, train_loader, val_loader, label_to_idx,
     print(f"Single-stage | Acc: {single_metrics['accuracy']:.4f} | Macro-F1: {single_metrics['macro_f1']:.4f}")
 
     merge_groups = discover_groups(single_cm, threshold=threshold)
-    print(f"Detected merge groups: {merge_groups}")
+    print(f"Detected merge groups: {[[idx_to_label[i] for i in group] for group in merge_groups]}")
 
     if not merge_groups:
         print("No merge groups detected. Hierarchical training skipped.")
