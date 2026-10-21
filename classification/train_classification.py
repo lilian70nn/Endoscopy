@@ -151,7 +151,7 @@ if __name__ == "__main__":
     
     train_loader, val_loader, label_to_idx = initialize_classification_dataloaders(
         data_dir="/content/labeled-images",
-        batch_size=256,
+        batch_size=512,
     )
     num_classes = len(label_to_idx)
 
@@ -176,7 +176,7 @@ if __name__ == "__main__":
     )
 
     if args.hierarchical:
-        from classification.hierarchical import train_hierarchical_classifier
+        from classification.hierarchical_independent import train_hierarchical_classifier
         train_hierarchical_classifier(
             model=model,
             train_loader=train_loader,
@@ -185,6 +185,6 @@ if __name__ == "__main__":
             ckpt_path=args.ckpt,
             single_stage_ckpt=str(Path(save_dir) / "best_model.pt"),
             edl=args.edl,
-            save_dir=str(Path(save_dir) / "hierarchical"),
+            save_dir=str(Path(save_dir) / "hierarchical_independent"),
             epochs=15,
         )
