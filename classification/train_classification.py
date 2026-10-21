@@ -132,7 +132,7 @@ if __name__ == "__main__":
     
     train_loader, val_loader, label_to_idx = initialize_classification_dataloaders(
         data_dir="/content/drive/MyDrive/surgdata/labeled-images",
-        batch_size=256,
+        batch_size=512,
     )
     num_classes = len(label_to_idx)
 
