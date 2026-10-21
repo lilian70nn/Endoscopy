@@ -5,7 +5,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm.auto import tqdm
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 from classification.classification_dataloader import initialize_classification_dataloaders
 from utils import initialize_siglip2
 
@@ -85,11 +90,25 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
 
         train_loss /= max(train_count, 1)
         val_loss /= max(val_count, 1)
+        labels = list(range(model.head.out_features)) 
         val_acc = accuracy_score(all_targets, all_preds)
-        val_f1 = f1_score(all_targets, all_preds, average="macro", zero_division=0)
+        val_macro_precision = precision_score(all_targets, all_preds, labels=labels, average="macro", zero_division=0,)
+        val_macro_recall = recall_score(all_targets, all_preds, labels=labels, average="macro", zero_division=0,)
+        val_f1 = f1_score(all_targets, all_preds, labels=labels, average="macro", zero_division=0,)
+        val_weighted_f1 = f1_score(all_targets, all_preds, labels=labels, average="weighted", zero_division=0,)
         mean_uncertainty = sum(all_uncertainties) / len(all_uncertainties) if all_uncertainties else None
 
-        row = {"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "val_accuracy": val_acc, "val_macro_f1": val_f1, "val_uncertainty": mean_uncertainty}
+        row = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_accuracy": val_acc,
+            "val_macro_precision": val_macro_precision,
+            "val_macro_recall": val_macro_recall,
+            "val_macro_f1": val_f1,
+            "val_weighted_f1": val_weighted_f1,
+            "val_uncertainty": mean_uncertainty,
+        }
         history.append(row)
 
         with open(save_dir / "metrics.csv", "w", newline="") as f:

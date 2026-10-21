@@ -9,7 +9,14 @@ import torch
 from PIL import Image
 from tqdm.auto import tqdm
 from torch.utils.data import Dataset, DataLoader
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    confusion_matrix,
+    classification_report,
+)
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 from utils import initialize_siglip2
@@ -26,6 +33,49 @@ def save_csv(path, rows):
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
+
+
+def calculate_metrics(targets, preds, num_classes, uncertainties=None, class_names=None):
+    labels = list(range(num_classes))
+
+    report = classification_report(
+        targets,
+        preds,
+        labels=labels,
+        target_names=class_names,
+        output_dict=True,
+        zero_division=0,
+    )
+
+    metrics = {
+        "accuracy": accuracy_score(targets, preds),
+        "macro_precision": precision_score(
+            targets, preds, labels=labels,
+            average="macro", zero_division=0,
+        ),
+        "macro_recall": recall_score(
+            targets, preds, labels=labels,
+            average="macro", zero_division=0,
+        ),
+        "macro_f1": f1_score(
+            targets, preds, labels=labels,
+            average="macro", zero_division=0,
+        ),
+        "weighted_f1": f1_score(
+            targets, preds, labels=labels,
+            average="weighted", zero_division=0,
+        ),
+        "mean_uncertainty": (
+            float(np.mean(uncertainties))
+            if uncertainties is not None and len(uncertainties) > 0
+            else None
+        ),
+        "classification_report": report,
+    }
+
+    cm = confusion_matrix(targets, preds, labels=labels)
+
+    return metrics, cm
 
 
 def evaluate_model(model, loader, device, edl=False, swin=False):
@@ -236,7 +286,7 @@ def train_hierarchical_model(coarse_model, specialists, train_loader, val_loader
             train_loss += loss.item() * targets.size(0)
             train_count += targets.size(0)
 
-        metrics, _, _, _, _ = evaluate_hierarchical(
+        metrics, _, _, _, _, _, _ = evaluate_hierarchical(
             coarse_model, specialists, val_loader, val_samples, processor,
             coarse_to_leaf, group_to_coarse, merge_groups, num_classes, edl=edl,
         )
@@ -261,10 +311,27 @@ def train_hierarchical_model(coarse_model, specialists, train_loader, val_loader
     return coarse_model, specialists, history
 
 
-def evaluate_hierarchical(coarse_model, specialists, val_loader, val_samples, processor, coarse_to_leaf, group_to_coarse, merge_groups, num_classes, edl=False, batch_size=32):
+def evaluate_hierarchical(
+    coarse_model,
+    specialists,
+    val_loader,
+    val_samples,
+    processor,
+    coarse_to_leaf,
+    group_to_coarse,
+    merge_groups,
+    num_classes,
+    edl=False,
+    batch_size=32,
+):
     device = next(coarse_model.parameters()).device
     coarse_model.eval()
-    coarse_preds, coarse_uncertainties = [], []
+
+    for specialist in specialists:
+        specialist.eval()
+
+    coarse_preds = []
+    coarse_uncertainties = []
 
     with torch.no_grad():
         for images, _ in val_loader:
@@ -276,6 +343,23 @@ def evaluate_hierarchical(coarse_model, specialists, val_loader, val_samples, pr
 
     if len(coarse_preds) != len(val_samples):
         raise ValueError("Validation predictions and samples have different lengths.")
+
+    leaf_to_coarse = {leaf: coarse_idx for coarse_idx, leaf in coarse_to_leaf.items()}
+
+    for group_id, group in enumerate(merge_groups):
+        coarse_idx = group_to_coarse[group_id]
+        for leaf in group:
+            leaf_to_coarse[leaf] = coarse_idx
+
+    targets = [label for _, label in val_samples]
+    coarse_targets = [leaf_to_coarse[label] for label in targets]
+    num_coarse = len(coarse_to_leaf) + len(merge_groups)
+    coarse_metrics, coarse_cm = calculate_metrics(
+        coarse_targets,
+        coarse_preds,
+        num_classes=num_coarse,
+        uncertainties=coarse_uncertainties if edl else None,
+    )
 
     final_preds = [-1] * len(coarse_preds)
     routing = defaultdict(list)
@@ -293,33 +377,98 @@ def evaluate_hierarchical(coarse_model, specialists, val_loader, val_samples, pr
             continue
 
         selected_samples = [val_samples[i] for i in indices]
-        loader = DataLoader(SwinInferenceDataset(selected_samples, processor), batch_size=batch_size, shuffle=False, num_workers=2)
-        specialist = specialists[group_id].to(device)
-        specialist.eval()
-        local_preds = []
+        loader = DataLoader(
+            SwinInferenceDataset(selected_samples, processor),
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=2,
+        )
 
+        local_preds = []
         with torch.no_grad():
             for images, _ in loader:
-                logits = specialist(pixel_values=images.to(device)).logits
+                logits = specialists[group_id](pixel_values=images.to(device)).logits
                 preds, _ = get_predictions(logits, edl)
                 local_preds.extend(preds.cpu().tolist())
 
         for index, local_pred in zip(indices, local_preds):
             final_preds[index] = group[local_pred]
 
-
     if any(pred < 0 for pred in final_preds):
         raise RuntimeError("Some validation samples did not receive a final prediction.")
 
-    targets = [label for _, label in val_samples]
-    cm = confusion_matrix(targets, final_preds, labels=list(range(num_classes)))
-    metrics = {
-        "accuracy": accuracy_score(targets, final_preds),
-        "macro_f1": f1_score(targets, final_preds, labels=list(range(num_classes)), average="macro", zero_division=0),
-        "mean_coarse_uncertainty": float(np.mean(coarse_uncertainties)) if coarse_uncertainties else None,
-        "classification_report": classification_report(targets, final_preds, labels=list(range(num_classes)), output_dict=True, zero_division=0),
-    }
-    return metrics, cm, targets, final_preds, coarse_preds
+    final_metrics, final_cm = calculate_metrics(
+        targets,
+        final_preds,
+        num_classes=num_classes,
+    )
+
+    return (
+        final_metrics,
+        final_cm,
+        targets,
+        final_preds,
+        coarse_preds,
+        coarse_metrics,
+        coarse_cm,
+    )
+
+
+def evaluate_specialists(
+    specialists,
+    val_samples,
+    processor,
+    merge_groups,
+    edl=False,
+    batch_size=32,
+):
+    results = {}
+    confusion_matrices = {}
+
+    for group_id, group in enumerate(merge_groups):
+        specialist = specialists[group_id]
+        device = next(specialist.parameters()).device
+        specialist.eval()
+        selected_samples = [(path, label) for path, label in val_samples if label in group]
+
+        if not selected_samples:
+            continue
+
+        loader = DataLoader(
+            SwinInferenceDataset(selected_samples, processor),
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=2,
+        )
+
+        local_targets = []
+        local_preds = []
+        local_uncertainties = []
+
+        with torch.no_grad():
+            for images, targets in loader:
+                images = images.to(device)
+                logits = specialist(pixel_values=images).logits
+                preds, uncertainty = get_predictions(logits, edl)
+                local_preds.extend(preds.cpu().tolist())
+                local_targets.extend(group.index(label) for label in targets.tolist())
+
+                if uncertainty is not None:
+                    local_uncertainties.extend(uncertainty.cpu().tolist())
+
+        metrics, cm = calculate_metrics(
+            local_targets,
+            local_preds,
+            num_classes=len(group),
+            uncertainties=local_uncertainties if edl else None,
+        )
+
+        results[f"group_{group_id}"] = metrics
+        confusion_matrices[f"group_{group_id}"] = cm
+
+        print(f"Swin Group {group_id} | Acc: {metrics['accuracy']:.4f} | Macro-F1: {metrics['macro_f1']:.4f}")
+
+    return results, confusion_matrices
 
 
 def train_hierarchical_classifier(model, train_loader, val_loader, label_to_idx, ckpt_path=None, single_stage_ckpt=None, edl=False, save_dir="./results/classification/hierarchical", epochs=20, threshold=15):
@@ -392,20 +541,37 @@ def train_hierarchical_classifier(model, train_loader, val_loader, label_to_idx,
         torch.cuda.empty_cache()
 
     coarse_model = coarse_model.to(device)
-    hierarchical_metrics, hierarchical_cm, targets, final_preds, coarse_preds = evaluate_hierarchical(
+    hierarchical_metrics, hierarchical_cm, targets, final_preds, coarse_preds, coarse_metrics, coarse_cm = evaluate_hierarchical(
         coarse_model=coarse_model, specialists=specialists, val_loader=val_loader, val_samples=val_samples,
         processor=processor, coarse_to_leaf=coarse_to_leaf, group_to_coarse=group_to_coarse,
         merge_groups=merge_groups, num_classes=num_classes, edl=edl,
     )
 
+    specialist_metrics, specialist_cms = evaluate_specialists(
+        specialists=specialists, val_samples=val_samples, processor=processor,
+        merge_groups=merge_groups, edl=edl,
+    )
+
+    np.savetxt(save_dir / "coarse_confusion_matrix.csv", coarse_cm, fmt="%d", delimiter=",",)
     np.savetxt(save_dir / "hierarchical_confusion_matrix.csv", hierarchical_cm, fmt="%d", delimiter=",")
+    for group_name, cm in specialist_cms.items():
+        np.savetxt(save_dir / f"swin_{group_name}_confusion_matrix.csv", cm, fmt="%d", delimiter=",",)
+
+    
     prediction_rows = [
         {"image_path": str(val_samples[i][0]), "true_label": idx_to_label[targets[i]], "coarse_prediction": coarse_preds[i], "final_prediction": idx_to_label[final_preds[i]], "correct": int(targets[i] == final_preds[i])}
         for i in range(len(targets))
     ]
     save_csv(save_dir / "hierarchical_predictions.csv", prediction_rows)
 
-    final_metrics = {"single_stage": single_metrics, "hierarchical": hierarchical_metrics, "training_history": history}
+    final_metrics = {
+        "single_stage": single_metrics,
+        "coarse": coarse_metrics,
+        "specialists": specialist_metrics,
+        "hierarchical": hierarchical_metrics,
+        "training_history": history,
+    }
+    
     with open(save_dir / "final_metrics.json", "w") as f:
         json.dump(final_metrics, f, indent=2)
 
