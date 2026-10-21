@@ -87,7 +87,7 @@ def evaluate_model(model, loader, device, edl=False, swin=False):
         for images, targets in loader:
             images, targets = images.to(device), targets.to(device).long()
             logits = model(pixel_values=images).logits if swin else model(images)
-            loss = compute_loss(logits, targets, edl, epoch=10)
+            loss = compute_loss(logits, targets, edl)
             preds, uncertainty = get_predictions(logits, edl)
 
             total_loss += loss.item() * targets.size(0)
@@ -217,7 +217,7 @@ def hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, 
             device=targets.device,
             dtype=torch.long,
         )
-        total_loss = compute_loss(coarse_logits, coarse_targets, edl=True, epoch=epoch) * targets.size(0)
+        total_loss = compute_loss(coarse_logits, coarse_targets, edl=True) * targets.size(0)
 
 
     for group_id, group in enumerate(merge_groups):
@@ -242,7 +242,7 @@ def hierarchical_forward(coarse_model, specialists, siglip_images, swin_images, 
                 device=targets.device,
                 dtype=torch.long,
             )
-            total_loss = total_loss + compute_loss(logits, local_targets, edl=True, epoch=epoch) * mask.sum()
+            total_loss = total_loss + compute_loss(logits, local_targets, edl=True) * mask.sum()
     if edl:
         loss = total_loss / targets.size(0)
     else:

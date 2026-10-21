@@ -28,22 +28,8 @@ class SigLIP2Classifier(nn.Module):
         return self.head(features)
 
 
-def kl_divergence(alpha):
-    beta = torch.ones_like(alpha)
 
-    sum_alpha = alpha.sum(dim=1, keepdim=True)
-    sum_beta = beta.sum(dim=1, keepdim=True)
-
-    log_b = torch.lgamma(sum_alpha) - torch.lgamma(alpha).sum(dim=1, keepdim=True)
-    log_b_uni = torch.lgamma(beta).sum(dim=1, keepdim=True) - torch.lgamma(sum_beta)
-
-    dg = torch.digamma(alpha) - torch.digamma(sum_alpha)
-    kl = ((alpha - beta) * dg).sum(dim=1, keepdim=True) + log_b + log_b_uni
-
-    return kl.mean()
-
-
-def compute_loss(logits, targets, edl=False, epoch=1, annealing_epochs=10):
+def compute_loss(logits, targets, edl=False,):
     if not edl:
         return F.cross_entropy(logits, targets)
 
@@ -147,6 +133,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--hierarchical", action="store_true")
+    parser.add_argument("--epochs", type=int, default=25, help="Number of training epochs")
     parser.add_argument(
         "--edl",
         action="store_true",
@@ -187,7 +174,7 @@ if __name__ == "__main__":
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=25,
+        epochs=args.epochs,
         edl=args.edl,
         save_dir=save_dir,
     )
@@ -203,5 +190,5 @@ if __name__ == "__main__":
             single_stage_ckpt=str(Path(save_dir) / "best_model.pt"),
             edl=args.edl,
             save_dir=str(Path(save_dir) / "hierarchical_independent"),
-            epochs=25,
+            epochs=args.epochs,
         )
