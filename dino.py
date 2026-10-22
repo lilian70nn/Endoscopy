@@ -280,10 +280,28 @@ class EpochCheckpoint(ModelCheckpoint):
         )
 
     def on_train_epoch_end(self, trainer, pl_module):
+        print(
+            f"[DEBUG CKPT A] Rank {trainer.global_rank}: "
+            f"checkpoint callback entered",
+            flush=True
+        )
+
         trainer.callback_metrics["epoch_plus_one"] = (
             trainer.current_epoch + 1
         )
+
         super().on_train_epoch_end(trainer, pl_module)
+
+        print(
+            f"[DEBUG CKPT B] Rank {trainer.global_rank}: "
+            f"checkpoint callback returned",
+            flush=True
+        )
+        if trainer.is_global_zero:
+            print(
+                f"[DEBUG CKPT FILES] {list(Path(self.dirpath).glob('checkpoint_epoch_*.pth'))}",
+                flush=True
+            )
 
 # Lightning DINO trainer
 
@@ -330,6 +348,10 @@ class DINOTrainer(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_idx):
+        print(
+            f"[DEBUG TRAIN START] Rank {self.global_rank}: step={batch_idx}",
+            flush=True
+        )
         optimizer = self.optimizers()
 
         epoch_progress = get_epoch_progress(
@@ -374,7 +396,16 @@ class DINOTrainer(pl.LightningModule):
         accum_steps = self.cfg["accumulate_grad_batches"]
         if batch_idx % accum_steps == 0:
             optimizer.zero_grad()
+        print(
+            f"[DEBUG BACKWARD A] Rank {self.global_rank}: step={batch_idx}",
+            flush=True
+        )
         self.manual_backward(loss / accum_steps)
+
+        print(
+            f"[DEBUG BACKWARD B] Rank {self.global_rank}: step={batch_idx}",
+            flush=True
+        )
         should_step = (batch_idx + 1) % accum_steps == 0
         if should_step:
             if self.cfg["clip_grad"] > 0: 
@@ -386,13 +417,34 @@ class DINOTrainer(pl.LightningModule):
                 for student_param, teacher_param in zip(self.student.parameters(), self.teacher.parameters()):
                     teacher_param.data.mul_(m).add_(student_param.detach().data, alpha=1.0 - m)
         batch_size = len(batch)
+        print(
+            f"[DEBUG TRAIN A] Rank {self.global_rank}: "
+            f"step={batch_idx}, before sync_dist log",
+            flush=True
+        )
+
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True, batch_size=batch_size)
+
+        print(
+            f"[DEBUG TRAIN B] Rank {self.global_rank}: "
+            f"step={batch_idx}, after sync_dist log",
+            flush=True
+        )
+
         self.log("lr", lr, prog_bar=False)
         self.log("teacher_momentum", momentum, prog_bar=False)
+        print(
+            f"[DEBUG TRAIN END] Rank {self.global_rank}: step={batch_idx}",
+            flush=True
+        )
         return loss
 
     def on_train_epoch_end(self):
 
+        print(
+            f"[DEBUG 11] Rank {self.global_rank}: Lightning on_train_epoch_end entered",
+            flush=True
+        )
         self.previous_steps = self.current_epoch_steps
         self.current_epoch_steps = 0
 

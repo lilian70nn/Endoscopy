@@ -297,8 +297,8 @@ class GastroNetCortexDataset(IterableDataset):
         cortex = CortexSession(self.access_url, stop_event)
         try:
             shards = cortex.get_files()
-            print(f"[Cortex] Found {len(shards)} archives in total.", flush=True)
-            shards = shards[:10]
+            # print(f"[Cortex] Found {len(shards)} archives in total.", flush=True)
+            # shards = shards[:10]
         finally:
             cortex.session.close()
 
@@ -354,6 +354,8 @@ class GastroNetCortexDataset(IterableDataset):
                     print(f"[Cortex] Archive stream complete: processed={completed}, skipped={skipped}, total={len(shards)}.", flush=True)
 
             finally:
+                print("[DEBUG 0] Entering executor cleanup", flush=True)
+                stop_event.set()
                 for future in futures.values():
                     future.cancel()
         print("[DEBUG 1] ThreadPoolExecutors exited", flush=True)
@@ -442,7 +444,13 @@ class PrefetchDataLoader:
                 status = 1
 
                 if rank == 0:
+                    print(f"[DEBUG QUEUE A] Rank {rank}: waiting for queue", flush=True)
                     item = batch_queue.get()
+                    print(
+                        f"[DEBUG QUEUE B] Rank {rank}: received "
+                        f"{'sentinel' if item is sentinel else 'batch'}",
+                        flush=True
+                    )
                     if item is sentinel:
                         status = -1 if producer_error else 0
                     else:
@@ -452,7 +460,9 @@ class PrefetchDataLoader:
                     backend = dist.get_backend()
                     device = torch.device("cuda", torch.cuda.current_device()) if backend == "nccl" else torch.device("cpu")
                     status_tensor = torch.tensor([status], dtype=torch.int32, device=device)
+                    print(f"[DEBUG DDP A] Rank {rank}: before broadcast", flush=True)
                     dist.broadcast(status_tensor, src=0)
+                    print(f"[DEBUG DDP B] Rank {rank}: after broadcast", flush=True)
                     status = int(status_tensor.item())
 
                 if status == 0:
@@ -472,7 +482,9 @@ class PrefetchDataLoader:
                 else:
                     scatter_list = [global_batch[i * self.batch_size:(i + 1) * self.batch_size] for i in range(world_size)] if rank == 0 else None
                     received = [None]
+                    print(f"[DEBUG DDP C] Rank {rank}: before scatter", flush=True)
                     dist.scatter_object_list(received, scatter_list, src=0)
+                    print(f"[DEBUG DDP D] Rank {rank}: after scatter", flush=True)
                     batch = received[0]
 
                 yield batch
