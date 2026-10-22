@@ -354,9 +354,9 @@ class GastroNetCortexDataset(IterableDataset):
                     print(f"[Cortex] Archive stream complete: processed={completed}, skipped={skipped}, total={len(shards)}.", flush=True)
 
             finally:
-                stop_event.set()
                 for future in futures.values():
                     future.cancel()
+        print("[DEBUG 1] ThreadPoolExecutors exited", flush=True)
 
 
 class PrefetchDataLoader:
@@ -407,15 +407,18 @@ class PrefetchDataLoader:
 
                 if not stop_event.is_set():
                     print(f"[Cortex] Epoch data complete: steps={steps}, global_batch_size={global_batch_size}, dropped_images={len(remaining)}.", flush=True)
+                print("[DEBUG 2] Producer finished reading images", flush=True)
 
             except Exception as e:
                 producer_error.append(e)
                 print(f"[Cortex][ERROR] Producer failed: {type(e).__name__}: {e}", flush=True)
 
             finally:
+                print("[DEBUG 3] Producer entering finally", flush=True)
                 if iterator is not None:
                     try:
                         iterator.close()
+                        print("[DEBUG 4] Iterator closed", flush=True)
                     except Exception as e:
                         producer_error.append(e)
                         print(f"[Cortex][ERROR] Producer cleanup failed: {e}", flush=True)
@@ -423,6 +426,7 @@ class PrefetchDataLoader:
                 while True:
                     try:
                         batch_queue.put(sentinel, timeout=0.5)
+                        print("[DEBUG 5] Sentinel sent", flush=True)
                         break
                     except queue.Full:
                         if stop_event.is_set() and batch_queue.full():
@@ -452,6 +456,10 @@ class PrefetchDataLoader:
                     status = int(status_tensor.item())
 
                 if status == 0:
+                    print(
+                        f"[DEBUG 6] Rank {rank}: DataLoader received end signal",
+                        flush=True
+                    )
                     break
 
                 if status == -1:
@@ -470,10 +478,15 @@ class PrefetchDataLoader:
                 yield batch
 
         finally:
+            print(f"[DEBUG 7] Rank {rank}: DataLoader cleanup started", flush=True)
             if rank == 0:
                 stop_event.set()
                 if producer_thread is not None:
+                    print("[DEBUG 8] Waiting for producer thread", flush=True)
                     producer_thread.join()
+                    print("[DEBUG 9] Producer thread joined", flush=True)
+
+            print(f"[DEBUG 10] Rank {rank}: DataLoader cleanup finished", flush=True)
 
 
 def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
