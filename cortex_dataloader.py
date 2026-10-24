@@ -285,7 +285,7 @@ class GastroNetCortexDataset(IterableDataset):
         stop_event = threading.Event()
         yield from self.iter_images(stop_event)
 
-    def iter_images(self, stop_event):
+    def iter_images(self, stop_event, dataset_completed=None):
         print("[Cortex] Cleaning cache before epoch...", flush=True)
         for path in self.cache_dir.iterdir():
             if path.is_dir():
@@ -314,6 +314,7 @@ class GastroNetCortexDataset(IterableDataset):
         next_submit = 0
         skipped = 0
         completed = 0
+        archive_iteration_finished = False
 
         with ThreadPoolExecutor(max_workers=self.download_workers) as download_pool, ThreadPoolExecutor(max_workers=self.decode_workers) as decode_pool:
             def fill_window(current_index):
@@ -351,7 +352,16 @@ class GastroNetCortexDataset(IterableDataset):
                         shard_bar.update(1)
 
                 if not stop_event.is_set():
-                    print(f"[Cortex] Archive stream complete: processed={completed}, skipped={skipped}, total={len(shards)}.", flush=True)
+                    archive_iteration_finished = (
+                        completed + skipped == len(shards)
+                    )
+
+                    print(
+                        f"[Cortex] Archive stream complete: "
+                        f"processed={completed}, skipped={skipped}, "
+                        f"total={len(shards)}.",
+                        flush=True
+                    )
 
             finally:
                 print("[DEBUG 0] Entering executor cleanup", flush=True)
@@ -359,6 +369,16 @@ class GastroNetCortexDataset(IterableDataset):
                 for future in futures.values():
                     future.cancel()
         print("[DEBUG 1] ThreadPoolExecutors exited", flush=True)
+
+        if archive_iteration_finished:
+            if dataset_completed is not None:
+                dataset_completed.set()
+
+            print(
+                "[Cortex][DATASET COMPLETE] "
+                "All archives processed and executors exited.",
+                flush=True
+            )
 
 
 class PrefetchDataLoader:
@@ -376,6 +396,10 @@ class PrefetchDataLoader:
         world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
         global_batch_size = self.batch_size * world_size
         stop_event = threading.Event()
+        consumer_stopped = threading.Event()
+        producer_completed = threading.Event()
+        dataset_completed = threading.Event()
+
         batch_queue = queue.Queue(maxsize=max(1, self.prefetch_batches))
         sentinel = object()
         producer_error = []
@@ -387,17 +411,19 @@ class PrefetchDataLoader:
             steps = 0
 
             try:
-                iterator = self.dataloader.iter_images(stop_event)
+                iterator = self.dataloader.iter_images(stop_event,
+                                                       dataset_completed=dataset_completed)
 
                 for image in iterator:
-                    if stop_event.is_set():
+                    if consumer_stopped.is_set():
                         break
 
                     remaining.append(image)
+
                     if len(remaining) < global_batch_size:
                         continue
 
-                    while not stop_event.is_set():
+                    while not consumer_stopped.is_set():
                         try:
                             batch_queue.put(remaining, timeout=0.5)
                             steps += 1
@@ -407,32 +433,69 @@ class PrefetchDataLoader:
 
                     remaining = []
 
-                if not stop_event.is_set():
-                    print(f"[Cortex] Epoch data complete: steps={steps}, global_batch_size={global_batch_size}, dropped_images={len(remaining)}.", flush=True)
-                print("[DEBUG 2] Producer finished reading images", flush=True)
+                print(
+                    f"[Cortex] Image iteration finished: "
+                    f"steps={steps}, dropped_images={len(remaining)}",
+                    flush=True
+                )
 
             except Exception as e:
                 producer_error.append(e)
-                print(f"[Cortex][ERROR] Producer failed: {type(e).__name__}: {e}", flush=True)
+                print(
+                    f"[Cortex][ERROR] Producer failed: "
+                    f"{type(e).__name__}: {e}",
+                    flush=True
+                )
 
             finally:
-                print("[DEBUG 3] Producer entering finally", flush=True)
+                print("[Cortex] Producer cleanup started.", flush=True)
+
                 if iterator is not None:
                     try:
                         iterator.close()
-                        print("[DEBUG 4] Iterator closed", flush=True)
                     except Exception as e:
                         producer_error.append(e)
-                        print(f"[Cortex][ERROR] Producer cleanup failed: {e}", flush=True)
+                        print(
+                            f"[Cortex][ERROR] Iterator cleanup failed: {e}",
+                            flush=True
+                        )
 
-                while True:
+                if dataset_completed.is_set()  and not producer_error:
+                    producer_completed.set()
+
+                wait_started = None
+
+                while not consumer_stopped.is_set():
                     try:
                         batch_queue.put(sentinel, timeout=0.5)
-                        print("[DEBUG 5] Sentinel sent", flush=True)
+
+                        if wait_started is not None:
+                            print(
+                                "[Cortex][RECOVERY SUCCESS][EOF_QUEUE_FULL] "
+                                f"Sentinel delivered after "
+                                f"{time.monotonic() - wait_started:.1f}s.",
+                                flush=True
+                            )
+                        else:
+                            print(
+                                "[Cortex] EOF sentinel delivered normally.",
+                                flush=True
+                            )
+
                         break
+
                     except queue.Full:
-                        if stop_event.is_set() and batch_queue.full():
-                            break
+                        if wait_started is None:
+                            wait_started = time.monotonic()
+
+                            print(
+                                "[Cortex][RECOVERY START][EOF_QUEUE_FULL] "
+                                "Queue full during EOF delivery. "
+                                "Waiting for Rank 0 to consume pending batches.",
+                                flush=True
+                            )
+
+                print("[Cortex] Producer exited.", flush=True)
 
         if rank == 0:
             producer_thread = threading.Thread(target=producer, name="cortex-producer", daemon=False)
@@ -444,13 +507,49 @@ class PrefetchDataLoader:
                 status = 1
 
                 if rank == 0:
-                    print(f"[DEBUG QUEUE A] Rank {rank}: waiting for queue", flush=True)
-                    item = batch_queue.get()
-                    print(
-                        f"[DEBUG QUEUE B] Rank {rank}: received "
-                        f"{'sentinel' if item is sentinel else 'batch'}",
-                        flush=True
-                    )
+                    while True:
+                        try:
+                            item = batch_queue.get(timeout=1.0)
+                            break
+
+                        except queue.Empty:
+                            if producer_thread is not None and producer_thread.is_alive():
+                                continue
+
+                            if producer_completed.is_set() and not producer_error:
+                                print(
+                                    "[Cortex][RECOVERY START][MISSING_SENTINEL] "
+                                    "Producer completed and queue is empty, "
+                                    "but EOF sentinel was not received.",
+                                    flush=True
+                                )
+
+                                item = sentinel
+
+                                print(
+                                    "[Cortex][RECOVERY SUCCESS][MISSING_SENTINEL] "
+                                    "EOF synthesized. Proceeding to DDP epoch shutdown.",
+                                    flush=True
+                                )
+                                break
+
+                            if not producer_error:
+                                producer_error.append(
+                                    RuntimeError(
+                                        "Producer exited before completing the dataset."
+                                    )
+                                )
+
+                            print(
+                                "[Cortex][ERROR][PRODUCER_EXIT] "
+                                "Producer exited unexpectedly. "
+                                "Broadcasting failure to all ranks.",
+                                flush=True
+                            )
+
+                            item = sentinel
+                            break
+
                     if item is sentinel:
                         status = -1 if producer_error else 0
                     else:
@@ -490,15 +589,38 @@ class PrefetchDataLoader:
                 yield batch
 
         finally:
-            print(f"[DEBUG 7] Rank {rank}: DataLoader cleanup started", flush=True)
-            if rank == 0:
-                stop_event.set()
-                if producer_thread is not None:
-                    print("[DEBUG 8] Waiting for producer thread", flush=True)
-                    producer_thread.join()
-                    print("[DEBUG 9] Producer thread joined", flush=True)
+            print(
+                f"[Cortex] Rank {rank}: DataLoader cleanup started.",
+                flush=True
+            )
 
-            print(f"[DEBUG 10] Rank {rank}: DataLoader cleanup finished", flush=True)
+            if rank == 0:
+                consumer_stopped.set()
+
+                stop_event.set()
+
+                if producer_thread is not None:
+                    producer_thread.join(timeout=60)
+
+                    if producer_thread.is_alive():
+                        print(
+                            "[Cortex][ERROR][PRODUCER_CLEANUP] "
+                            "Producer did not exit within 60 seconds.",
+                            flush=True
+                        )
+                        raise RuntimeError(
+                            "Cortex Producer failed to terminate within 60 seconds"
+                        )
+
+                    print(
+                        "[Cortex] Producer thread joined successfully.",
+                        flush=True
+                    )
+
+            print(
+                f"[Cortex] Rank {rank}: DataLoader cleanup finished.",
+                flush=True
+            )
 
 
 def initialize_dataloader(batch_size=512, cache_dir="./cortex_cache"):
