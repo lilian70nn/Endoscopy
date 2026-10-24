@@ -68,7 +68,7 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
             images, targets = images.to(device), targets.to(device).long()
             optimizer.zero_grad()
             logits = model(images)
-            loss = compute_loss(logits, targets, edl, epoch=epoch)
+            loss = compute_loss(logits, targets, edl,)
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * targets.size(0)
@@ -82,7 +82,7 @@ def train_classification(model, train_loader, val_loader, epochs, edl=False, sav
             for images, targets in val_loader:
                 images, targets = images.to(device), targets.to(device).long()
                 logits = model(images)
-                loss = compute_loss(logits, targets, edl, epoch=epoch)
+                loss = compute_loss(logits, targets, edl)
                 preds, uncertainty = get_predictions(logits, edl)
                 val_loss += loss.item() * targets.size(0)
                 val_count += targets.size(0)

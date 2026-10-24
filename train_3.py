@@ -27,7 +27,7 @@ def main():
 
         dataloader = initialize_dataloader(
             batch_size=300,
-            cache_dir=f"./cortex_cache_{ssl_method}_{initialization}",
+            cache_dir=f"./cortex_cache_{ssl_method}_{initialization}_3",
         )
         
         model = initialize_siglip2(initialization=initialization)

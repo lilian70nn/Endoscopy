@@ -17,17 +17,17 @@ from lejepa import train_lejepa
 def main():
 
     experiments = [
-        # ("dino", "siglip2"),
+        ("dino", "siglip2"),
         # ("dino", "imagenet"),
         # ("lejepa", "siglip2"),
-        ("lejepa", "imagenet"),
+        # ("lejepa", "imagenet"),
     ]
 
     for ssl_method, initialization in experiments:
 
         dataloader = initialize_dataloader(
             batch_size=300,
-            cache_dir=f"./cortex_cache_{ssl_method}_{initialization}",
+            cache_dir=f"./cortex_cache_{ssl_method}_{initialization}_4",
         )
         
         model = initialize_siglip2(initialization=initialization)
