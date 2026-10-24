@@ -297,8 +297,8 @@ class GastroNetCortexDataset(IterableDataset):
         cortex = CortexSession(self.access_url, stop_event)
         try:
             shards = cortex.get_files()
-            # print(f"[Cortex] Found {len(shards)} archives in total.", flush=True)
-            # shards = shards[:10]
+            print(f"[Cortex] Found {len(shards)} archives in total.", flush=True)
+            shards = shards[:3]
         finally:
             cortex.session.close()
 
