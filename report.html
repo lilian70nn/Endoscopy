@@ -102,6 +102,37 @@
             color: #475569;
         }
 
+        .figure-frame {
+            display: block;
+            width: 100%;
+            border: none;
+        }
+
+        .figure-caption {
+            font-size: 14px;
+            color: #64748b;
+            text-align: center;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+        }
+
+        .confusion-wrapper {
+            width: 100%;
+            height: 850px;
+            overflow: hidden;
+        }
+
+        .confusion-frame {
+            display: block;
+            width: 1400px;
+            height: 1250px;
+            border: none;
+            transform: scale(0.67);
+            transform-origin: top left;
+        }
+
         @media (max-width: 600px) {
             .container {
                 margin: 30px auto;
@@ -244,7 +275,7 @@
 
         <p>
             Training was performed for
-            <strong>25 epochs</strong>
+            <strong>15 epochs</strong>
             with a batch size of
             <strong>512</strong>.
         </p>
@@ -262,11 +293,173 @@
 
     </section>
 
-    <!-- Experimental Results will be added here later -->
+    <!-- Experimental Results -->
+    <h2>1.2 Experimental Results</h2>
+
+    <!-- Training Curves -->
+    <section class="card">
+
+        <h3>1.2.1 Training Curves</h3>
+
+        <p>
+            Figure 1 presents the validation Macro-F1 scores
+            across training epochs for the four experimental
+            configurations. The curves illustrate the
+            convergence behavior and classification performance
+            of different backbone initialization strategies
+            and loss functions.
+        </p>
+
+        <div class="figure-container">
+            <iframe
+                class="figure-frame"
+                src="classification_vit/figures/training_curves.html"
+                title="Interactive Training Curves"
+                height="580"
+                loading="lazy">
+            </iframe>
+
+            <p class="figure-caption">
+                Figure 1. Validation Macro-F1 across training epochs
+                for the four experimental configurations.
+                Hover over the curves to inspect individual values.
+            </p>
+        </div>
+
+    </section>
+
+
+    <!-- Classification Performance -->
+    <section class="card">
+
+        <h3>1.2.2 Classification Performance</h3>
+
+        <p>
+            Table 2 summarizes the final classification performance
+            of the four experimental configurations using
+            Accuracy, Macro-F1, and Weighted-F1.
+        </p>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Accuracy</th>
+                        <th>Macro-F1</th>
+                        <th>Weighted-F1</th>
+                    </tr>
+                </thead>
+
+                <tbody id="classification-results">
+                    <tr>
+                        <td colspan="4">Loading results...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+    </section>
+
+
+    <!-- Confusion Matrices -->
+    <section class="card">
+
+        <h3>1.2.3 Confusion Matrices</h3>
+
+        <p>
+            Figure 2 presents the confusion matrices for
+            the four experimental configurations.
+            The horizontal axis represents predicted classes,
+            while the vertical axis represents ground-truth classes.
+            Cell colors indicate row-normalized proportions.
+            Hovering over a cell displays the corresponding
+            sample count and percentage.
+        </p>
+
+        <div class="confusion-wrapper">
+            <iframe
+                class="confusion-frame"
+                src="classification_vit/figures/hierarchical_confusion_matrices.html"
+                title="Interactive Confusion Matrices"
+                loading="lazy">
+            </iframe>
+        </div>
+
+        <p class="figure-caption">
+            Figure 2. Row-normalized confusion matrices
+            for the four experimental configurations.
+        </p>
+
+    </section>
 
     <!-- Segmentation will be added after Classification -->
 
 </div>
 
+
+<script>
+async function loadCSVTable(filePath, tableId, columns) {
+    const tbody = document.getElementById(tableId);
+
+    try {
+        const response = await fetch(filePath);
+
+        if (!response.ok) {
+            throw new Error(`Cannot load ${filePath}`);
+        }
+
+        const text = await response.text();
+
+        const lines = text.trim().split(/\r?\n/);
+        const headers = lines[0].split(",");
+
+        tbody.innerHTML = "";
+
+        for (const line of lines.slice(1)) {
+            if (!line.trim()) continue;
+
+            const values = line.split(",");
+            const row = document.createElement("tr");
+
+            for (const column of columns) {
+                const index = headers.indexOf(column);
+
+                if (index === -1) {
+                    throw new Error(`Missing CSV column: ${column}`);
+                }
+
+                const cell = document.createElement("td");
+                const value = values[index];
+
+                if (
+                    ["Accuracy", "Macro-F1", "Weighted-F1"].includes(column)
+                ) {
+                    cell.textContent = Number(value).toFixed(4);
+                } else {
+                    cell.textContent = value;
+                }
+
+                row.appendChild(cell);
+            }
+
+            tbody.appendChild(row);
+        }
+
+    } catch (error) {
+        console.error(error);
+        tbody.innerHTML =
+            `<tr><td colspan="${columns.length}">Unable to load results.</td></tr>`;
+    }
+}
+
+loadCSVTable(
+    "classification_vit/figures/hierarchical_performance.csv",
+    "classification-results",
+    ["Model", "Accuracy", "Macro-F1", "Weighted-F1"]
+);
+</script>
+
 </body>
+
 </html>

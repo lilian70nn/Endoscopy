@@ -10,7 +10,7 @@ import torch.nn as nn
 import timm
 from torch.serialization import safe_globals
 from torch.torch_version import TorchVersion
-from segmentation.segmentation_dataloader import initialize_segmentation_dataloaders
+from segmentation_vit.segmentation_dataloader import initialize_segmentation_dataloaders
 
 
 class ConvBlock(nn.Module):
@@ -48,7 +48,8 @@ class ViTUNet(nn.Module):
     def forward(self, images):
 
         tokens = self.backbone.forward_features(images)
-        tokens = tokens[:, 1:, :]
+        num_prefix_tokens = self.backbone.num_prefix_tokens
+        tokens = tokens[:, num_prefix_tokens:, :]
 
         batch_size, num_tokens, hidden_size = tokens.shape
         grid_size = math.isqrt(num_tokens)
