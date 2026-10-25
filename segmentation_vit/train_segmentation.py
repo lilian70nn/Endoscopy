@@ -7,7 +7,9 @@ from tqdm.auto import tqdm
 import math
 import torch.nn as nn
 
-from utils import initialize_siglip2
+import timm
+from torch.serialization import safe_globals
+from torch.torch_version import TorchVersion
 from segmentation.segmentation_dataloader import initialize_segmentation_dataloaders
 
 
@@ -28,12 +30,12 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 
-class SigLIP2UNet(nn.Module):
-    def __init__(self, siglip2, num_classes=2):
+class ViTUNet(nn.Module):
+    def __init__(self, backbone, num_classes=2):
         super().__init__()
 
-        self.backbone = siglip2.vision_model
-        hidden_size = self.backbone.config.hidden_size
+        self.backbone = backbone
+        hidden_size = backbone.num_features
         self.decoder = nn.Sequential(
             ConvBlock(hidden_size, 256),
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
@@ -44,21 +46,17 @@ class SigLIP2UNet(nn.Module):
         )
 
     def forward(self, images):
-        outputs = self.backbone(pixel_values=images)
-        tokens = outputs.last_hidden_state
+
+        tokens = self.backbone.forward_features(images)
+        tokens = tokens[:, 1:, :]
+
         batch_size, num_tokens, hidden_size = tokens.shape
         grid_size = math.isqrt(num_tokens)
 
         if grid_size * grid_size != num_tokens:
             raise ValueError(f"Expected square patch grid, got {num_tokens} tokens")
 
-        features = tokens.transpose(1, 2).reshape(
-            batch_size,
-            hidden_size,
-            grid_size,
-            grid_size,
-        )
-
+        features = tokens.transpose(1, 2).reshape(batch_size, hidden_size, grid_size, grid_size)
         logits = self.decoder(features)
         return F.interpolate(
             logits,
@@ -66,6 +64,22 @@ class SigLIP2UNet(nn.Module):
             mode="bilinear",
             align_corners=False,
         )
+
+
+def initialize_vit_unet(num_classes=2, ckpt_path=None):
+
+    backbone = timm.create_model("vit_base_patch16_224", pretrained=(ckpt_path is None), num_classes=0)
+
+    if ckpt_path is not None:
+        with safe_globals([TorchVersion]):
+            checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True,)
+
+        backbone.load_state_dict(checkpoint["ema_backbone"], strict=True,)
+        print(f"Loaded ViT backbone from: {ckpt_path}")
+    else:
+        print("Loaded ImageNet pretrained ViT backbone")
+
+    return ViTUNet(backbone, num_classes)
 
     
 
@@ -199,12 +213,7 @@ if __name__ == "__main__":
         data_dir="/content/segmented-images",
         batch_size=256,
     )
-    siglip2 = initialize_siglip2(initialization="siglip2")
-    if args.ckpt is not None:
-        checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
-        siglip2.vision_model.load_state_dict(checkpoint["model"], strict=True)
-        print(f"Loaded pretrained backbone from: {args.ckpt}")
-    model = SigLIP2UNet(siglip2, num_classes=2)
+    model = initialize_vit_unet(num_classes=2, ckpt_path=args.ckpt)
 
     save_dir = args.save_dir or "/content/drive/MyDrive/results/segmentation"
 

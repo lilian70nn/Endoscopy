@@ -3,6 +3,9 @@ from pathlib import Path
 import argparse
 import torch
 import torch.nn as nn
+import timm
+from torch.serialization import safe_globals
+from torch.torch_version import TorchVersion
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 from sklearn.metrics import (
@@ -15,19 +18,33 @@ from classification.classification_dataloader import initialize_classification_d
 from utils import initialize_siglip2
 
 
-class SigLIP2Classifier(nn.Module):
-    def __init__(self, siglip2, num_classes):
+class ViTClassifier(nn.Module):
+    def __init__(self, backbone, num_classes):
         super().__init__()
-        self.backbone = siglip2.vision_model
-        hidden_size = self.backbone.config.hidden_size
-        self.head = nn.Linear(hidden_size, num_classes)
+        self.backbone = backbone
+        self.head = nn.Linear(backbone.num_features, num_classes)
 
     def forward(self, images):
-        outputs = self.backbone(pixel_values=images)
-        features = outputs.pooler_output
+        features = self.backbone(images)
         return self.head(features)
 
 
+def initialize_vit_classifier(num_classes, ckpt_path=None):
+
+    backbone = timm.create_model("vit_base_patch16_224", pretrained=(ckpt_path is None), num_classes=0,)
+    if ckpt_path is not None:
+        with safe_globals([TorchVersion]):
+            checkpoint = torch.load(
+                ckpt_path,
+                map_location="cpu",
+                weights_only=True,
+            )
+        backbone.load_state_dict(checkpoint["ema_backbone"], strict=True,)
+        print(f"Loaded ViT backbone from: {ckpt_path}")
+    else:
+        print("Loaded ImageNet pretrained ViT backbone")
+
+    return ViTClassifier(backbone, num_classes)
 
 def compute_loss(logits, targets, edl=False,):
     if not edl:
@@ -161,15 +178,8 @@ if __name__ == "__main__":
 
     torch.manual_seed(42)
 
-    siglip2 = initialize_siglip2(initialization="siglip2")
-    if args.ckpt is not None:
-        checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
-        siglip2.vision_model.load_state_dict(checkpoint["model"], strict=True)
-        print(f"Loaded pretrained backbone from: {args.ckpt}")
-    model = SigLIP2Classifier(siglip2, num_classes)
-
+    model = initialize_vit_classifier(num_classes=num_classes, ckpt_path=args.ckpt)
     save_dir = args.save_dir or "/content/drive/MyDrive/results/classification"
-
     train_classification(
         model=model,
         train_loader=train_loader,
