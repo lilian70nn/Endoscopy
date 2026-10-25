@@ -14,8 +14,7 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from classification.classification_dataloader import initialize_classification_dataloaders
-from utils import initialize_siglip2
+from classification_vit.classification_dataloader import initialize_classification_dataloaders
 
 
 class ViTClassifier(nn.Module):
@@ -190,7 +189,7 @@ if __name__ == "__main__":
     )
 
     if args.hierarchical:
-        from classification.hierarchical_independent import train_hierarchical_classifier
+        from classification_vit.hierarchical import train_hierarchical_classifier
         train_hierarchical_classifier(
             model=model,
             train_loader=train_loader,
@@ -199,6 +198,6 @@ if __name__ == "__main__":
             ckpt_path=args.ckpt,
             single_stage_ckpt=str(Path(save_dir) / "best_model.pt"),
             edl=args.edl,
-            save_dir=str(Path(save_dir) / "hierarchical_independent"),
+            save_dir=str(Path(save_dir) / "hierarchical"),
             epochs=args.epochs,
         )

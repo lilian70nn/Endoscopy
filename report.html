@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Experimental Report</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: #ffffff;
+            color: #1e293b;
+            font-family: -apple-system, BlinkMacSystemFont,
+                         "Segoe UI", Arial, sans-serif;
+            line-height: 1.7;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 60px auto;
+            padding: 0 30px;
+        }
+
+        h1 {
+            font-size: 34px;
+            font-weight: 700;
+            margin-bottom: 40px;
+            color: #0f172a;
+            border-bottom: 3px solid #2563eb;
+            padding-bottom: 15px;
+        }
+
+        h2 {
+            font-size: 26px;
+            margin-top: 35px;
+            margin-bottom: 20px;
+            color: #1e293b;
+        }
+
+        h3 {
+            font-size: 20px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            color: #1e293b;
+        }
+
+        p {
+            font-size: 16px;
+            margin-bottom: 18px;
+            color: #475569;
+        }
+
+        .card {
+            background: transparent;
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            margin-bottom: 35px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            font-size: 15px;
+        }
+
+        th {
+            background: #eff6ff;
+            color: #1e40af;
+            font-weight: 600;
+            text-align: left;
+            padding: 15px;
+            border-bottom: 2px solid #bfdbfe;
+        }
+
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        tr:hover td {
+            background: #f8fafc;
+        }
+
+        .highlight {
+            color: #2563eb;
+            font-weight: 600;
+        }
+
+        .note {
+            background: #f1f5f9;
+            border-left: 4px solid #2563eb;
+            padding: 15px 20px;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-size: 15px;
+            color: #475569;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                margin: 30px auto;
+                padding: 0 15px;
+            }
+
+            .card {
+                padding: 0;
+                overflow-x: auto;
+            }
+
+            h1 {
+                font-size: 28px;
+            }
+
+            h2 {
+                font-size: 23px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <!-- Classification -->
+    <h1>1. Classification</h1>
+
+    <h2>1.1 Experimental Settings</h2>
+
+    <!-- Dataset -->
+    <section class="card">
+
+        <h3>1.1.1 Dataset</h3>
+
+        <p>
+            The experiments were conducted on a gastrointestinal
+            endoscopic image dataset containing
+            <span class="highlight">10,436 images across 16 classes</span>.
+        </p>
+
+        <p>
+            The dataset was divided into training and validation sets
+            using an 85:15 stratified split, resulting in
+            <strong>8,870 training images</strong> and
+            <strong>1,566 validation images</strong>.
+        </p>
+
+        <p>
+            All images were resized to 224 × 224 pixels and normalized
+            using ImageNet statistics. Random horizontal flipping
+            was applied during training.
+        </p>
+
+    </section>
+
+
+    <!-- Experimental Configurations -->
+    <section class="card">
+
+        <h3>1.1.2 Experimental Configurations</h3>
+
+        <p>
+            Four experimental settings were evaluated to investigate
+            the effects of backbone initialization strategies
+            and loss functions.
+        </p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Setting</th>
+                    <th>Backbone Initialization</th>
+                    <th>Loss Function</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                <tr>
+                    <td><strong>1</strong></td>
+                    <td>ImageNet-pretrained ViT-B/16</td>
+                    <td>Cross-Entropy (CE)</td>
+                </tr>
+
+                <tr>
+                    <td><strong>2</strong></td>
+                    <td>ImageNet-pretrained ViT-B/16</td>
+                    <td>Evidential Deep Learning (EDL)</td>
+                </tr>
+
+                <tr>
+                    <td><strong>3</strong></td>
+                    <td>GastroNet DINOv1-pretrained ViT-B/16</td>
+                    <td>Cross-Entropy (CE)</td>
+                </tr>
+
+                <tr>
+                    <td><strong>4</strong></td>
+                    <td>GastroNet DINOv1-pretrained ViT-B/16</td>
+                    <td>Evidential Deep Learning (EDL)</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>
+            The ImageNet settings used a ViT-B/16 backbone initialized
+            with supervised ImageNet-pretrained weights.
+        </p>
+
+        <p>
+            The DINOv1 settings used a ViT-B/16 backbone initialized
+            with weights obtained from self-supervised pretraining
+            on GastroNet images.
+        </p>
+
+        <p>
+            For the CE settings, models were optimized using the
+            standard cross-entropy loss.
+            For the EDL settings, a Dirichlet-based evidential loss
+            was used to model classification evidence and estimate
+            predictive uncertainty.
+        </p>
+
+    </section>
+
+
+    <!-- Training Configuration -->
+    <section class="card">
+
+        <h3>1.1.3 Training Configuration</h3>
+
+        <p>
+            All ViT models were fine-tuned using the AdamW optimizer
+            with a learning rate of
+            <span class="highlight">1 × 10⁻⁴</span>
+            and a weight decay of
+            <span class="highlight">1 × 10⁻⁴</span>.
+        </p>
+
+        <p>
+            Training was performed for
+            <strong>25 epochs</strong>
+            with a batch size of
+            <strong>512</strong>.
+        </p>
+
+        <p>
+            The best checkpoint was selected based on the highest
+            validation Macro-F1 score.
+        </p>
+
+        <div class="note">
+            The same dataset split and ViT training configuration
+            were used across all four experimental settings
+            to ensure a consistent comparison.
+        </div>
+
+    </section>
+
+    <!-- Experimental Results will be added here later -->
+
+    <!-- Segmentation will be added after Classification -->
+
+</div>
+
+</body>
+</html>
