@@ -189,23 +189,10 @@ def train_segmentation(model, train_loader, val_loader, epochs, edl=False, save_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--edl",
-        action="store_true",
-        help="Enable evidential deep learning",
-    )
-    parser.add_argument(
-        "--ckpt",
-        type=str,
-        default=None,
-        help="Path to DINO or LeJEPA pretrained checkpoint",
-    )
-    parser.add_argument(
-        "--save_dir",
-        type=str,
-        default=None,
-        help="Directory to save training results",
-    )
+    parser.add_argument("--edl", action="store_true", help="Enable evidential deep learning",)
+    parser.add_argument("--epochs", type=int, default=30, help="Number of training epochs")
+    parser.add_argument("--ckpt", type=str, default=None, help="Path to DINO or LeJEPA pretrained checkpoint",)
+    parser.add_argument("--save_dir", type=str, default=None, help="Directory to save training results",)
     args = parser.parse_args()
 
     torch.manual_seed(42)
@@ -222,7 +209,7 @@ if __name__ == "__main__":
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=50,
+        epochs=args.epochs,
         edl=args.edl,
         save_dir=save_dir,
     )
