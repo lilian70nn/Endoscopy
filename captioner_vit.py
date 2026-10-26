@@ -8,6 +8,8 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import timm
+from torch.serialization import safe_globals
+from torch.torch_version import TorchVersion
 
 from classification_vit.train_classification import ViTClassifier
 from segmentation_vit.train_segmentation import ViTUNet
@@ -230,7 +232,8 @@ class CaptioningModel(nn.Module):
 
 
 def load_checkpoint(path, key=None):
-    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    with safe_globals([TorchVersion]):
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True,)
     if key is not None:
         checkpoint = checkpoint[key]
     if not isinstance(checkpoint, dict):
