@@ -543,6 +543,107 @@
 
     </section>
 
+    <!-- Segmentation Experimental Results -->
+    <h2>2.2 Experimental Results</h2>
+
+    <!-- Training Curves -->
+    <section class="card">
+
+        <h3>2.2.1 Training Curves</h3>
+
+        <p>
+            Figure 3 presents the training and validation loss,
+            validation Dice, and validation IoU across training
+            epochs for the four experimental configurations.
+            These curves illustrate the convergence behavior
+            and segmentation performance of different backbone
+            initialization strategies and loss functions.
+        </p>
+
+        <div class="figure-container">
+            <iframe
+                class="figure-frame"
+                src="segmentation_vit/figures/training_curves.html"
+                title="Interactive Segmentation Training Curves"
+                height="850"
+                loading="lazy">
+            </iframe>
+
+            <p class="figure-caption">
+                Figure 3. Training loss, validation loss,
+                validation Dice, and validation IoU
+                across training epochs.
+                Hover over the curves to inspect individual values.
+            </p>
+        </div>
+
+    </section>
+
+
+    <!-- Segmentation Performance -->
+    <section class="card">
+
+        <h3>2.2.2 Segmentation Performance</h3>
+
+        <p>
+            Table 3 summarizes the segmentation performance
+            of the four experimental configurations.
+            The best checkpoint for each configuration was
+            selected based on the highest validation Dice score.
+            Dice and IoU are reported at the corresponding epoch.
+        </p>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Best Epoch</th>
+                        <th>Dice</th>
+                        <th>IoU</th>
+                    </tr>
+                </thead>
+
+                <tbody id="segmentation-results">
+                    <tr>
+                        <td colspan="4">Loading results...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+    </section>
+
+
+    <!-- Qualitative Results -->
+    <section class="card">
+
+        <h3>2.2.3 Qualitative Results</h3>
+
+        <p>
+            Figure 4 presents qualitative segmentation results
+            for four validation images.
+            The original images and ground-truth masks are shown
+            alongside the predictions from the four experimental
+            configurations.
+            All models were evaluated on the same images
+            to facilitate visual comparison.
+        </p>
+
+        <div class="figure-container">
+            <img
+                src="segmentation_vit/figures/qualitative_results.png"
+                alt="Qualitative segmentation results"
+                style="display: block; width: 100%; height: auto;">
+
+            <p class="figure-caption">
+                Figure 4. Qualitative comparison of segmentation
+                predictions from the four experimental configurations.
+            </p>
+        </div>
+
+    </section>
+
 </div>
 
 
@@ -581,7 +682,7 @@ async function loadCSVTable(filePath, tableId, columns) {
                 const value = values[index];
 
                 if (
-                    ["Accuracy", "Macro-F1", "Weighted-F1"].includes(column)
+                    ["Accuracy", "Macro-F1", "Weighted-F1", "Dice", "IoU"].includes(column)
                 ) {
                     cell.textContent = Number(value).toFixed(4);
                 } else {
@@ -605,6 +706,12 @@ loadCSVTable(
     "classification_vit/figures/hierarchical_performance.csv",
     "classification-results",
     ["Model", "Accuracy", "Macro-F1", "Weighted-F1"]
+);
+
+loadCSVTable(
+    "segmentation_vit/figures/segmentation_performance.csv",
+    "segmentation-results",
+    ["Model", "Best Epoch", "Dice", "IoU"]
 );
 </script>
 
