@@ -170,6 +170,7 @@ class CaptioningModel(nn.Module):
         text_embeds = self.decoder.get_input_embeddings()(text_ids)
 
         inputs_embeds = torch.cat([prefix, start_embeds, text_embeds], dim=1)
+        inputs_embeds = inputs_embeds.to(self.decoder.dtype)
 
         prefix_mask = torch.ones(
             (batch_size, prefix.shape[1] + 1),
@@ -209,6 +210,7 @@ class CaptioningModel(nn.Module):
 
         start_embeds = self.decoder.get_input_embeddings()(start_ids)
         inputs_embeds = torch.cat([prefix, start_embeds], dim=1)
+        inputs_embeds = inputs_embeds.to(self.decoder.dtype)
 
         attention_mask = torch.ones(
             inputs_embeds.shape[:2],
