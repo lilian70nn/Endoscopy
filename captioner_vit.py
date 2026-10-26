@@ -7,9 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from utils import initialize_siglip2
-from classification.classification import SigLIP2Classifier
-from segmentation.segmentation import SigLIP2UNet
+import timm
+
+from classification_vit.train_classification import ViTClassifier
+from segmentation_vit.train_segmentation import ViTUNet
 
 
 class VisualAdapter(nn.Module):
@@ -99,7 +100,7 @@ class CaptioningModel(nn.Module):
         if self.start_token_id is None:
             raise ValueError("Tokenizer has neither BOS nor EOS token.")
 
-        vision_dim = self.vision_encoder.config.hidden_size
+        vision_dim = self.vision_encoder.num_features
         llm_dim = self.decoder.config.hidden_size
         self.adapter = MultimodalAdapter(vision_dim, llm_dim, 
                                          cls_classes=cls_classes, 
@@ -121,7 +122,7 @@ class CaptioningModel(nn.Module):
 
     def extract_features(self, images):
         with torch.no_grad():
-            z = self.vision_encoder(pixel_values=images).last_hidden_state
+            z = self.vision_encoder.forward_features(images)
             cls_probs, seg_probs, cls_alpha, seg_alpha = None, None, None, None
 
             if self.cls_model is not None:
@@ -238,10 +239,9 @@ def load_checkpoint(path, key=None):
 
 
 def load_captioning_model(args):
-    siglip = initialize_siglip2(initialization="siglip2")
-    vision_encoder = siglip.vision_model
+    vision_encoder = timm.create_model("vit_base_patch16_224", pretrained=False, num_classes=0,)
+    vision_state = load_checkpoint(args.vit_ckpt, key="ema_backbone")
 
-    vision_state = load_checkpoint(args.siglip_ckpt, key="model")
     vision_encoder.load_state_dict(vision_state, strict=True)
 
     cls_model, seg_model, cls_classes, seg_classes = None, None, None, None
@@ -252,15 +252,16 @@ def load_captioning_model(args):
 
         cls_state = load_checkpoint(args.cls_ckpt)
         cls_classes = cls_state["head.weight"].shape[0]
-        cls_siglip = initialize_siglip2(initialization="siglip2")
-        cls_model = SigLIP2Classifier(cls_siglip, cls_classes)
+        cls_backbone = timm.create_model("vit_base_patch16_224", pretrained=False, num_classes=0,)
+        cls_model = ViTClassifier(cls_backbone, cls_classes)
         cls_model.load_state_dict(cls_state, strict=True)
 
         seg_state = load_checkpoint(args.seg_ckpt)
         seg_classes = seg_state["decoder.5.weight"].shape[0]
-        seg_siglip = initialize_siglip2(initialization="siglip2")
-        seg_model = SigLIP2UNet(seg_siglip, num_classes=seg_classes)
+        seg_backbone = timm.create_model("vit_base_patch16_224", pretrained=False, num_classes=0,)
+        seg_model = ViTUNet(seg_backbone, num_classes=seg_classes)
         seg_model.load_state_dict(seg_state, strict=True)
+
 
     model = CaptioningModel(
         qwen_name=args.qwen_name,
@@ -282,7 +283,7 @@ def load_captioning_model(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline", type=int, choices=[1, 2, 3], required=True)
-    parser.add_argument("--siglip_ckpt", type=str, required=True)
+    parser.add_argument("--vit_ckpt", type=str, required=True)
     parser.add_argument("--cls_ckpt", type=str, default=None)
     parser.add_argument("--seg_ckpt", type=str, default=None)
     parser.add_argument("--adapter_ckpt", type=str, default=None)
